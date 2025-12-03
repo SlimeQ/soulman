@@ -1,0 +1,95 @@
+param(
+    [string]$SourcePath,
+    [string]$InstallRoot = "$env:LOCALAPPDATA\soulman-clickonce",
+    [switch]$SkipCacheClear
+)
+
+$ErrorActionPreference = 'Stop'
+
+function Resolve-Source {
+    param([string]$PathArg)
+    if ($PathArg) {
+        return (Resolve-Path $PathArg).Path
+    }
+
+    return (Split-Path -Parent $MyInvocation.MyCommand.Path)
+}
+
+function Resolve-Mage {
+    $candidates = @(
+        "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\mage.exe",
+        "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\mage.exe"
+    )
+    foreach ($path in $candidates) {
+        if (Test-Path $path) { return $path }
+    }
+    return $null
+}
+
+$payloadRoot = Resolve-Source $SourcePath
+$manifest = Join-Path $payloadRoot 'Soulman.application'
+if (-not (Test-Path $manifest)) {
+    throw "Soulman.application not found under $payloadRoot. Point -SourcePath at the published ClickOnce folder."
+}
+
+Write-Host "[install] Payload root: $payloadRoot" -ForegroundColor Cyan
+Write-Host "[install] Target location: $InstallRoot" -ForegroundColor Cyan
+
+if (-not $SkipCacheClear) {
+    $mage = Resolve-Mage
+    if ($mage) {
+        Write-Host "[install] Clearing ClickOnce cache (mage -cc) to avoid prior subscription conflicts..." -ForegroundColor Cyan
+        & $mage -cc | Out-Null
+    } else {
+        Write-Warning "mage.exe not found; skipping ClickOnce cache clear. If install complains about a different location, re-run with mage installed or uninstall the previous Soulman entry first."
+    }
+}
+
+if (Test-Path $InstallRoot) {
+    Write-Host "[install] Removing previous staged payload at $InstallRoot" -ForegroundColor Cyan
+    Remove-Item -Recurse -Force -Path $InstallRoot
+}
+
+New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
+
+$robocopyLog = New-TemporaryFile
+try {
+    $robocopyArgs = @($payloadRoot, $InstallRoot, '/E', '/NFL', '/NDL', '/NJH', '/NJS', '/NC', '/NS')
+    robocopy @robocopyArgs | Tee-Object -FilePath $robocopyLog | Out-Null
+    $robocode = $LASTEXITCODE
+    if ($robocode -gt 7) {
+        throw "robocopy failed with exit code $robocode. See $robocopyLog for details."
+    }
+}
+finally {
+    if (Test-Path $robocopyLog) { Remove-Item $robocopyLog -Force }
+}
+
+$stagedManifest = Join-Path $InstallRoot 'Soulman.application'
+if (-not (Test-Path $stagedManifest)) {
+    throw "Staged manifest missing at $stagedManifest"
+}
+
+try {
+    [xml]$xml = Get-Content $stagedManifest
+    $ns = New-Object System.Xml.XmlNamespaceManager($xml.NameTable)
+    $ns.AddNamespace("asmv1","urn:schemas-microsoft-com:asm.v1")
+    $ns.AddNamespace("asmv2","urn:schemas-microsoft-com:asm.v2")
+    $providerNode = $xml.SelectSingleNode("//asmv2:deploymentProvider", $ns)
+    if (-not $providerNode) {
+        $providerNode = $xml.CreateElement("deploymentProvider","urn:schemas-microsoft-com:asm.v2")
+        $deployNode = $xml.SelectSingleNode("//asmv2:deployment",$ns)
+        if ($deployNode) { $deployNode.AppendChild($providerNode) | Out-Null }
+    }
+    if ($providerNode) {
+        $providerUri = (New-Object System.Uri((Resolve-Path $stagedManifest).Path)).AbsoluteUri
+        $null = $providerNode.SetAttribute("codebase",$providerUri)
+        $xml.Save($stagedManifest)
+    }
+}
+catch {
+    Write-Warning "Failed to stamp stable deployment provider URI: $_"
+}
+
+Write-Host "[install] Launching ClickOnce manifest from $stagedManifest" -ForegroundColor Cyan
+Start-Process -FilePath $stagedManifest
