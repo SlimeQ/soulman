@@ -7,6 +7,7 @@ Follow these rules whenever you change behavior:
 1. Keep docs in lockstep
    - Update `README.md` with prerequisites, install/run steps (Windows service, CLI), and any new defaults for source/destination selection or schedules.
    - If you add flags, config keys, or UI controls, document them where users configure things (examples, screenshots, or `docs/` pages).
+   - Record new behavior/configuration in `./wiki` so it stays current alongside the code.
 
 2. Describe the pipeline
    - When changing how we detect finished downloads, parse ID3 tags, or decide when to move/rename files, record the flow and states so others know how "complete" is determined and what happens on errors.
