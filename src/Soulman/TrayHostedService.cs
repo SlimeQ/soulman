@@ -1,7 +1,13 @@
 using System.Diagnostics;
+using System.IO;
 using System.Drawing;
+using System.Net.Http;
+using System.Text.Json;
+using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.Reflection;
 using Microsoft.Extensions.Options;
 
 namespace Soulman;
@@ -107,6 +113,8 @@ internal class TrayApplicationContext : ApplicationContext
     private readonly MoveLogStore _moveLog;
     private readonly NotifyIcon _notifyIcon;
     private readonly ContextMenuStrip _menu;
+    private readonly string _startupShortcutPath;
+    private readonly SynchronizationContext? _uiContext;
 
     public TrayApplicationContext(IOptionsMonitor<SoulmanSettings> options, CloneFolderStore cloneStore,
         PathPreferenceStore pathStore, MoveNotificationBroker moveBroker, MoveLogStore moveLog, Icon? icon)
@@ -117,6 +125,10 @@ internal class TrayApplicationContext : ApplicationContext
         _moveBroker = moveBroker;
         _moveLog = moveLog;
         _menu = new ContextMenuStrip();
+        _uiContext = SynchronizationContext.Current;
+        _startupShortcutPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.Startup),
+            "Soulman.lnk");
         _notifyIcon = new NotifyIcon
         {
             Icon = icon,
@@ -145,7 +157,7 @@ internal class TrayApplicationContext : ApplicationContext
         var sourcePath = prefs.SourcePath ?? settings.SourcePath;
         var destPath = prefs.DestinationPath ?? settings.DestinationPath;
 
-        _menu.Items.Add(new ToolStripMenuItem("Soulman") { Enabled = false });
+        _menu.Items.Add(new ToolStripMenuItem(GetVersionLabel()) { Enabled = false });
         _menu.Items.Add(new ToolStripSeparator());
 
         var addItem = new ToolStripMenuItem("Add Clone Destination...");
@@ -192,6 +204,18 @@ internal class TrayApplicationContext : ApplicationContext
         _menu.Items.Add(openLog);
 
         _menu.Items.Add(new ToolStripSeparator());
+
+        var update = new ToolStripMenuItem("Update to Latest");
+        update.Click += (_, _) => Task.Run(UpdateToLatestAsync);
+        _menu.Items.Add(update);
+
+        var startupItem = new ToolStripMenuItem("Run on Startup")
+        {
+            Checked = IsStartupEnabled(),
+            CheckOnClick = false
+        };
+        startupItem.Click += (_, _) => ToggleStartup(startupItem);
+        _menu.Items.Add(startupItem);
 
         var exit = new ToolStripMenuItem("Exit");
         exit.Click += (_, _) => ExitThread();
@@ -326,5 +350,282 @@ internal class TrayApplicationContext : ApplicationContext
         {
             // swallow UI errors
         }
+    }
+
+    private bool IsStartupEnabled()
+    {
+        return File.Exists(_startupShortcutPath);
+    }
+
+    private void ToggleStartup(ToolStripMenuItem item)
+    {
+        if (IsStartupEnabled())
+        {
+            if (DisableStartup())
+            {
+                item.Checked = false;
+                _notifyIcon.ShowBalloonTip(2000, "Soulman", "Startup launch disabled", ToolTipIcon.Info);
+            }
+        }
+        else
+        {
+            if (EnableStartup())
+            {
+                item.Checked = true;
+                _notifyIcon.ShowBalloonTip(2000, "Soulman", "Startup launch enabled", ToolTipIcon.Info);
+            }
+        }
+    }
+
+    private bool EnableStartup()
+    {
+        try
+        {
+            var target = Application.ExecutablePath;
+            if (string.IsNullOrWhiteSpace(target) || !File.Exists(target))
+            {
+                return false;
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(_startupShortcutPath)!);
+            dynamic? shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell")!);
+            if (shell == null)
+            {
+                return false;
+            }
+
+            dynamic shortcut = shell.CreateShortcut(_startupShortcutPath);
+            shortcut.TargetPath = target;
+            shortcut.WorkingDirectory = Path.GetDirectoryName(target);
+            shortcut.Description = "Soulman music mover";
+            shortcut.IconLocation = target;
+            shortcut.Save();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private bool DisableStartup()
+    {
+        try
+        {
+            if (File.Exists(_startupShortcutPath))
+            {
+                File.Delete(_startupShortcutPath);
+            }
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private async Task UpdateToLatestAsync()
+    {
+        Notify("Soulman", "Checking for updates...", ToolTipIcon.Info);
+        try
+        {
+            var apiUrl = "https://api.github.com/repos/SlimeQ/soulman/releases/latest";
+            using var client = new HttpClient();
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("Soulman-Tray/1.0");
+
+            using var json = JsonDocument.Parse(await client.GetStringAsync(apiUrl));
+            var assets = json.RootElement.GetProperty("assets");
+            string? downloadUrl = null;
+
+            foreach (var asset in assets.EnumerateArray())
+            {
+                var name = asset.GetProperty("name").GetString();
+                if (!string.IsNullOrWhiteSpace(name) &&
+                    name.EndsWith("soulman_installer.exe", StringComparison.OrdinalIgnoreCase))
+                {
+                    downloadUrl = asset.GetProperty("browser_download_url").GetString();
+                    break;
+                }
+            }
+
+            downloadUrl ??= assets.EnumerateArray()
+                .Select(a => a.GetProperty("browser_download_url").GetString())
+                .FirstOrDefault(u => !string.IsNullOrWhiteSpace(u) &&
+                                     u.EndsWith(".exe", StringComparison.OrdinalIgnoreCase));
+
+            if (string.IsNullOrWhiteSpace(downloadUrl))
+            {
+                throw new InvalidOperationException("No installer asset found on the latest release.");
+            }
+
+            var tempPath = Path.Combine(Path.GetTempPath(), "soulman_installer.exe");
+            await using (var target = System.IO.File.Create(tempPath))
+            await using (var stream = await client.GetStreamAsync(downloadUrl))
+            {
+                await stream.CopyToAsync(target);
+            }
+
+            Notify("Soulman", "Launching installer...", ToolTipIcon.Info);
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = tempPath,
+                UseShellExecute = true
+            });
+
+            Environment.Exit(0);
+        }
+        catch (Exception ex)
+        {
+            Notify("Soulman", $"Update failed: {ex.Message}", ToolTipIcon.Warning);
+        }
+    }
+
+    private void PostToUi(Action action)
+    {
+        if (_uiContext != null)
+        {
+            _uiContext.Post(_ => action(), null);
+        }
+        else
+        {
+            action();
+        }
+    }
+
+    private void Notify(string title, string message, ToolTipIcon icon)
+    {
+        PostToUi(() => _notifyIcon.ShowBalloonTip(3000, title, message, icon));
+    }
+
+    private static string GetVersionLabel()
+    {
+        try
+        {
+            var releaseTag = TryGetAssemblyMetadata("ReleaseTag");
+            if (!string.IsNullOrWhiteSpace(releaseTag))
+            {
+                return $"Soulman {releaseTag}";
+            }
+
+            var clickOnceVersion = TryGetClickOnceVersion();
+            if (!string.IsNullOrWhiteSpace(clickOnceVersion))
+            {
+                return $"Soulman {clickOnceVersion}";
+            }
+
+            var productVersion = TryGetProductVersion();
+            if (!string.IsNullOrWhiteSpace(productVersion))
+            {
+                return $"Soulman {productVersion}";
+            }
+
+            var info = Assembly.GetExecutingAssembly()
+                .GetCustomAttributes<AssemblyInformationalVersionAttribute>()
+                .FirstOrDefault()?.InformationalVersion;
+
+            if (!string.IsNullOrWhiteSpace(info))
+            {
+                return $"Soulman {TrimMetadata(info)}";
+            }
+
+            var ver = Assembly.GetExecutingAssembly().GetName().Version;
+            if (ver != null)
+            {
+                return $"Soulman {TrimMetadata(ver.ToString())}";
+            }
+        }
+        catch
+        {
+            // ignore and fallback
+        }
+
+        return "Soulman";
+    }
+
+    private static string? TryGetAssemblyMetadata(string key)
+    {
+        try
+        {
+            var attrs = Assembly.GetExecutingAssembly()
+                .GetCustomAttributes<AssemblyMetadataAttribute>()
+                .Where(a => string.Equals(a.Key, key, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            return attrs.FirstOrDefault()?.Value;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? TryGetProductVersion()
+    {
+        try
+        {
+            var path = Assembly.GetExecutingAssembly().Location;
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return null;
+            }
+
+            var ver = FileVersionInfo.GetVersionInfo(path).ProductVersion;
+            return TrimMetadata(ver);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? TryGetClickOnceVersion()
+    {
+        try
+        {
+            var deploymentAsm = Assembly.Load("System.Deployment, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a");
+            var type = deploymentAsm?.GetType("System.Deployment.Application.ApplicationDeployment");
+            if (type == null)
+            {
+                return null;
+            }
+
+            var isNetworkDeployedProp = type.GetProperty("IsNetworkDeployed", BindingFlags.Public | BindingFlags.Static);
+            if (isNetworkDeployedProp == null)
+            {
+                return null;
+            }
+
+            var isNetworkDeployed = isNetworkDeployedProp.GetValue(null) as bool?;
+            if (isNetworkDeployed != true)
+            {
+                return null;
+            }
+
+            var currentDeploymentProp = type.GetProperty("CurrentDeployment", BindingFlags.Public | BindingFlags.Static);
+            var currentDeployment = currentDeploymentProp?.GetValue(null);
+            if (currentDeployment == null)
+            {
+                return null;
+            }
+
+            var versionProp = currentDeployment.GetType().GetProperty("CurrentVersion");
+            var versionValue = versionProp?.GetValue(currentDeployment)?.ToString();
+            return versionValue;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string TrimMetadata(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var core = value.Split('+')[0];
+        return core;
     }
 }

@@ -1,4 +1,14 @@
+using System.Threading;
 using Soulman;
+
+const string mutexName = "Global\\Soulman.Instance";
+using var singleInstance = new Mutex(initiallyOwned: true, name: mutexName, out var isNewInstance);
+
+if (!isNewInstance)
+{
+    Console.WriteLine("Soulman is already running; exiting duplicate instance.");
+    return;
+}
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -24,4 +34,14 @@ if (OperatingSystem.IsWindows() && Environment.UserInteractive)
 }
 
 var host = builder.Build();
-host.Run();
+try
+{
+    host.Run();
+}
+finally
+{
+    if (isNewInstance)
+    {
+        singleInstance.ReleaseMutex();
+    }
+}

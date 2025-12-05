@@ -5,8 +5,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>dotnet-Soulman-3ae528ee-619e-40f6-bee6-4b6706b7dc04</UserSecretsId>
     <UseWindowsForms>true</UseWindowsForms>
-    <ApplicationIcon>..\..\Assets\soulman.ico</ApplicationIcon>
+    <ApplicationIcon>soulman.ico</ApplicationIcon>
     <OutputType>WinExe</OutputType>
+    <AssemblyInformationalVersion Condition="'$(ReleaseTag)' != ''">$(ReleaseTag)</AssemblyInformationalVersion>
+    <AssemblyInformationalVersion Condition="'$(ReleaseTag)' == ''">$(Version)</AssemblyInformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -16,13 +18,17 @@
   </ItemGroup>
 
   <ItemGroup>
+    <AssemblyMetadata Include="ReleaseTag" Value="$(ReleaseTag)" Condition="'$(ReleaseTag)' != ''" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Update="appsettings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Update="appsettings.Development.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <Content Include="..\..\Assets\soulman.ico">
+    <Content Include="soulman.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

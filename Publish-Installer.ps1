@@ -2,7 +2,9 @@ param(
     [string]$Configuration = 'Release',
     [string]$PublishProfile = 'src/Soulman/Properties/PublishProfiles/WinClickOnce.pubxml',
     [string]$ApplicationVersion,
-    [int]$ApplicationRevision
+    [int]$ApplicationRevision,
+    [string]$ReleaseTag,
+    [switch]$CleanOutput
 )
 
 function Resolve-MsBuild {
@@ -80,6 +82,20 @@ function Resolve-MsBuild {
     throw 'MSBuild.exe not found. Install Visual Studio Build Tools or Visual Studio with the MSBuild component.'
 }
 
+$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+$publishDir = Join-Path $root "src/Soulman/bin/$Configuration/net8.0-windows/publish"
+$appPublishDir = Join-Path $root "src/Soulman/bin/$Configuration/net8.0-windows/app.publish"
+
+if ($CleanOutput) {
+    Write-Host "Cleaning previous publish output at $publishDir and $appPublishDir" -ForegroundColor Cyan
+    foreach ($dir in @($publishDir, $appPublishDir)) {
+        if (Test-Path $dir) {
+            Remove-Item -Recurse -Force -Path $dir -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 $msbuild = Resolve-MsBuild
 Write-Host "Using MSBuild at $msbuild" -ForegroundColor Cyan
 
@@ -96,6 +112,10 @@ if ($ApplicationVersion) {
 
 if ($PSBoundParameters.ContainsKey('ApplicationRevision')) {
     $arguments += "/p:ApplicationRevision=$ApplicationRevision"
+}
+
+if ($ReleaseTag) {
+    $arguments += "/p:ReleaseTag=$ReleaseTag"
 }
 
 & $msbuild @arguments

@@ -14,6 +14,7 @@ public class DownloadScanner
     private readonly ILogger<DownloadScanner> _logger;
     private readonly MoveLogStore _moveLog;
     private readonly ConcurrentDictionary<string, FileObservation> _observed = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _protectedPathWarnings = new(StringComparer.OrdinalIgnoreCase);
 
     public DownloadScanner(ILogger<DownloadScanner> logger, MoveLogStore moveLog)
     {
@@ -30,6 +31,11 @@ public class DownloadScanner
         }
 
         var destination = Path.GetFullPath(settings.DestinationPath!);
+        var cloneRoots = NormalizePaths(cloneDestinations)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var protectedRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { destination };
+        protectedRoots.UnionWith(cloneRoots);
         var sources = GatherSources(settings).ToArray();
 
         if (sources.Length == 0)
@@ -45,6 +51,13 @@ public class DownloadScanner
                 {
                     _logger.LogWarning("Destination {Destination} sits under source {Source}; skipping to avoid loops",
                         destination, s);
+                    return false;
+                }
+
+                if (IsSubPath(s, destination))
+                {
+                    _logger.LogWarning("Source {Source} sits under destination {Destination}; skipping to avoid moving library files",
+                        s, destination);
                     return false;
                 }
 
@@ -64,7 +77,22 @@ public class DownloadScanner
             try
             {
                 files.AddRange(Directory.EnumerateFiles(source, "*.*", SearchOption.AllDirectories)
-                    .Where(settings.IsSupportedFile));
+                    .Where(settings.IsSupportedFile)
+                    .Where(f =>
+                    {
+                        if (IsProtectedPath(f, protectedRoots, out var protectedRoot))
+                        {
+                            if (_protectedPathWarnings.Add(protectedRoot))
+                            {
+                                _logger.LogWarning("Skipping files under protected path {ProtectedPath} to prevent data loss",
+                                    protectedRoot);
+                            }
+
+                            return false;
+                        }
+
+                        return true;
+                    }));
             }
             catch (Exception ex)
             {
@@ -130,7 +158,7 @@ public class DownloadScanner
                 continue;
             }
 
-            if (await ProcessStableFileAsync(info, destination, cloneDestinations, token))
+            if (await ProcessStableFileAsync(info, destination, cloneRoots, token))
             {
                 movedCount++;
             }
@@ -218,12 +246,13 @@ public class DownloadScanner
             var title = string.IsNullOrWhiteSpace(tag.Title) ? fallbackTitle : tag.Title!;
             var track = tag.Track > 0 ? (int?)tag.Track : null;
             var disc = tag.Disc > 0 ? (int?)tag.Disc : null;
+            var discCount = tag.DiscCount > 0 ? (int?)tag.DiscCount : null;
 
-            return new TrackMetadata(artist, album, title, track, disc);
+            return new TrackMetadata(artist, album, title, track, disc, discCount);
         }
         catch
         {
-            return new TrackMetadata(unknownArtist, unknownAlbum, fallbackTitle, null, null);
+            return new TrackMetadata(unknownArtist, unknownAlbum, fallbackTitle, null, null, null);
         }
     }
 
@@ -233,7 +262,8 @@ public class DownloadScanner
         var album = SanitizePathSegment(metadata.Album);
         var title = SanitizePathSegment(metadata.Title);
 
-        if (metadata.DiscNumber.HasValue && metadata.DiscNumber.Value > 0)
+        if (metadata.DiscNumber.HasValue && metadata.DiscNumber.Value > 0 &&
+            (metadata.DiscNumber.Value > 1 || (metadata.DiscCount.HasValue && metadata.DiscCount.Value > 1)))
         {
             album = $"{album} (Disc {metadata.DiscNumber.Value})";
         }
@@ -372,6 +402,49 @@ public class DownloadScanner
         return candidate;
     }
 
+    private static IEnumerable<string> NormalizePaths(IEnumerable<string>? paths)
+    {
+        if (paths == null)
+        {
+            yield break;
+        }
+
+        foreach (var path in paths)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                continue;
+            }
+
+            string? full;
+            try
+            {
+                full = Path.GetFullPath(path);
+            }
+            catch
+            {
+                continue;
+            }
+
+            yield return full;
+        }
+    }
+
+    private static bool IsProtectedPath(string path, IReadOnlyCollection<string> protectedRoots, out string protectedRoot)
+    {
+        foreach (var root in protectedRoots)
+        {
+            if (IsSubPath(path, root))
+            {
+                protectedRoot = root;
+                return true;
+            }
+        }
+
+        protectedRoot = string.Empty;
+        return false;
+    }
+
     private static bool IsSubPath(string candidate, string potentialParent)
     {
         var candidateFull = Path.GetFullPath(candidate)
@@ -405,5 +478,6 @@ public class DownloadScanner
 
     private record FileObservation(long Length, DateTimeOffset LastSeen);
 
-    private record TrackMetadata(string Artist, string Album, string Title, int? TrackNumber, int? DiscNumber);
+    private record TrackMetadata(string Artist, string Album, string Title, int? TrackNumber, int? DiscNumber,
+        int? DiscCount);
 }

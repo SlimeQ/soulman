@@ -70,26 +70,12 @@ if (-not (Test-Path $stagedManifest)) {
     throw "Staged manifest missing at $stagedManifest"
 }
 
-try {
-    [xml]$xml = Get-Content $stagedManifest
-    $ns = New-Object System.Xml.XmlNamespaceManager($xml.NameTable)
-    $ns.AddNamespace("asmv1","urn:schemas-microsoft-com:asm.v1")
-    $ns.AddNamespace("asmv2","urn:schemas-microsoft-com:asm.v2")
-    $providerNode = $xml.SelectSingleNode("//asmv2:deploymentProvider", $ns)
-    if (-not $providerNode) {
-        $providerNode = $xml.CreateElement("deploymentProvider","urn:schemas-microsoft-com:asm.v2")
-        $deployNode = $xml.SelectSingleNode("//asmv2:deployment",$ns)
-        if ($deployNode) { $deployNode.AppendChild($providerNode) | Out-Null }
-    }
-    if ($providerNode) {
-        $providerUri = (New-Object System.Uri((Resolve-Path $stagedManifest).Path)).AbsoluteUri
-        $null = $providerNode.SetAttribute("codebase",$providerUri)
-        $xml.Save($stagedManifest)
-    }
-}
-catch {
-    Write-Warning "Failed to stamp stable deployment provider URI: $_"
+$setupExe = Join-Path $InstallRoot 'setup.exe'
+if (Test-Path $setupExe) {
+    Write-Host "[install] Launching ClickOnce setup bootstrapper at $setupExe" -ForegroundColor Cyan
+    Start-Process -FilePath $setupExe
+    return
 }
 
-Write-Host "[install] Launching ClickOnce manifest from $stagedManifest" -ForegroundColor Cyan
+Write-Host "[install] setup.exe not found, launching ClickOnce manifest at $stagedManifest" -ForegroundColor Cyan
 Start-Process -FilePath $stagedManifest
