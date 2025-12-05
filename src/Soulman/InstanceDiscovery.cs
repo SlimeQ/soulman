@@ -7,7 +7,7 @@ using System.Net.NetworkInformation;
 
 namespace Soulman;
 
-public record DiscoveredInstance(string MachineName, string Version, IPEndPoint EndPoint);
+public record DiscoveredInstance(string MachineName, string Version, int SyncPort, IPEndPoint EndPoint);
 
 public class InstanceDiscovery : IHostedService, IDisposable
 {
@@ -15,6 +15,7 @@ public class InstanceDiscovery : IHostedService, IDisposable
     private const string MagicHeader = "SOULMAN_DISCOVERY_V1";
     private static readonly IPAddress MulticastAddress = IPAddress.Parse("239.255.64.64");
     private readonly ILogger<InstanceDiscovery> _logger;
+    private readonly SyncServer _syncServer;
     private readonly string _machineName;
     private readonly string _version;
     private readonly CancellationTokenSource _cts = new();
@@ -22,9 +23,10 @@ public class InstanceDiscovery : IHostedService, IDisposable
     private Task? _listenerTask;
     private UdpClient? _listener;
 
-    public InstanceDiscovery(ILogger<InstanceDiscovery> logger)
+    public InstanceDiscovery(ILogger<InstanceDiscovery> logger, SyncServer syncServer)
     {
         _logger = logger;
+        _syncServer = syncServer;
         _machineName = Environment.MachineName;
         _version = SoulmanVersion.GetVersion();
     }
@@ -174,7 +176,7 @@ public class InstanceDiscovery : IHostedService, IDisposable
             ? new IPEndPoint(result.RemoteEndPoint.Address, responsePort.Value)
             : result.RemoteEndPoint;
 
-        var payload = $"{MagicHeader}:RESPONSE:{requestId}:{_machineName}|{_version}";
+        var payload = $"{MagicHeader}:RESPONSE:{requestId}:{_machineName}|{_version}|{_syncServer.Port}";
         var bytes = Encoding.UTF8.GetBytes(payload);
 
         try
@@ -352,6 +354,8 @@ public class InstanceDiscovery : IHostedService, IDisposable
         var parts = response.Split('|');
         var machine = parts.FirstOrDefault() ?? string.Empty;
         var version = parts.Skip(1).FirstOrDefault() ?? string.Empty;
+        var portString = parts.Skip(2).FirstOrDefault() ?? "0";
+        int.TryParse(portString, out var syncPort);
 
         if (string.IsNullOrWhiteSpace(machine) ||
             string.Equals(machine, _machineName, StringComparison.OrdinalIgnoreCase))
@@ -361,7 +365,7 @@ public class InstanceDiscovery : IHostedService, IDisposable
 
         if (_pending.TryGetValue(requestId, out var pending))
         {
-            pending.Add(new DiscoveredInstance(machine, version, remote));
+            pending.Add(new DiscoveredInstance(machine, version, syncPort, remote));
         }
 
         return true;

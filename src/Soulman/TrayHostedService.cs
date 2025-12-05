@@ -20,6 +20,7 @@ public class TrayHostedService : IHostedService, IDisposable
     private readonly MoveNotificationBroker _moveBroker;
     private readonly MoveLogStore _moveLog;
     private readonly InstanceDiscovery _discovery;
+    private readonly TransferProgressBroker _progressBroker;
     private Thread? _uiThread;
     private TrayApplicationContext? _context;
     private readonly ManualResetEventSlim _started = new(false);
@@ -31,7 +32,8 @@ public class TrayHostedService : IHostedService, IDisposable
         PathPreferenceStore pathStore,
         MoveNotificationBroker moveBroker,
         MoveLogStore moveLog,
-        InstanceDiscovery discovery)
+        InstanceDiscovery discovery,
+        TransferProgressBroker progressBroker)
     {
         _logger = logger;
         _options = options;
@@ -40,6 +42,7 @@ public class TrayHostedService : IHostedService, IDisposable
         _moveBroker = moveBroker;
         _moveLog = moveLog;
         _discovery = discovery;
+        _progressBroker = progressBroker;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -71,7 +74,7 @@ public class TrayHostedService : IHostedService, IDisposable
             }
 
             _context = new TrayApplicationContext(_logger, _options, _cloneStore, _pathStore, _moveBroker, _moveLog,
-                _discovery, icon);
+                _discovery, _progressBroker, icon);
             _started.Set();
             Application.Run(_context);
         }
@@ -117,17 +120,19 @@ internal class TrayApplicationContext : ApplicationContext
     private readonly MoveNotificationBroker _moveBroker;
     private readonly MoveLogStore _moveLog;
     private readonly InstanceDiscovery _discovery;
+    private readonly TransferProgressBroker _progressBroker;
     private readonly NotifyIcon _notifyIcon;
     private readonly ContextMenuStrip _menu;
     private readonly string _startupShortcutPath;
     private readonly SynchronizationContext? _uiContext;
     private ToolStripMenuItem? _instancesMenu;
     private int _instanceRefreshInFlight;
+    private TransferProgressForm? _progressForm;
 
     public TrayApplicationContext(ILogger<TrayHostedService> logger, IOptionsMonitor<SoulmanSettings> options,
         CloneFolderStore cloneStore,
         PathPreferenceStore pathStore, MoveNotificationBroker moveBroker, MoveLogStore moveLog,
-        InstanceDiscovery discovery, Icon? icon)
+        InstanceDiscovery discovery, TransferProgressBroker progressBroker, Icon? icon)
     {
         _logger = logger;
         _options = options;
@@ -136,6 +141,7 @@ internal class TrayApplicationContext : ApplicationContext
         _moveBroker = moveBroker;
         _moveLog = moveLog;
         _discovery = discovery;
+        _progressBroker = progressBroker;
         _menu = new ContextMenuStrip();
         _uiContext = SynchronizationContext.Current;
         _startupShortcutPath = Path.Combine(
@@ -158,6 +164,7 @@ internal class TrayApplicationContext : ApplicationContext
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
         _menu.Dispose();
+        _progressForm?.Dispose();
         base.ExitThreadCore();
     }
 
@@ -220,6 +227,10 @@ internal class TrayApplicationContext : ApplicationContext
         var openLog = new ToolStripMenuItem("Open Move Log");
         openLog.Click += (_, _) => OpenMoveLog();
         _menu.Items.Add(openLog);
+
+        var openTransfers = new ToolStripMenuItem("Open Transfers");
+        openTransfers.Click += (_, _) => OpenTransfers();
+        _menu.Items.Add(openTransfers);
 
         _menu.Items.Add(new ToolStripSeparator());
 
@@ -385,6 +396,23 @@ internal class TrayApplicationContext : ApplicationContext
                 "Soulman",
                 $"Could not open move log: {ex.Message}",
                 ToolTipIcon.Warning);
+        }
+    }
+
+    private void OpenTransfers()
+    {
+        if (_progressForm == null || _progressForm.IsDisposed)
+        {
+            _progressForm = new TransferProgressForm(_progressBroker);
+        }
+
+        if (!_progressForm.Visible)
+        {
+            _progressForm.Show();
+        }
+        else
+        {
+            _progressForm.Activate();
         }
     }
 
