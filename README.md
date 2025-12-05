@@ -43,6 +43,11 @@ Defaults (override via config, CLI, or env):
   .\install.ps1
   ```
 - Optional flags: `-Configuration` (default `Release`), `-PublishProfile` (defaults to `src/Soulman/Properties/PublishProfiles/WinClickOnce.pubxml`), `-ApplicationRevision`, `-CleanOutput` (wipe prior publish folders before building).
+- Installer logs to `%TEMP%\soulman_install_<timestamp>.log`; on failure it pauses so you can read the error and log path.
+- Installer attempts to add a firewall allow rule named `Soulman LAN Discovery (UDP 45832)` for inbound UDP 45832 on Private/Domain profiles so LAN peers can respond; if blocked or declined, add the rule manually:
+  ```powershell
+  New-NetFirewallRule -DisplayName "Soulman LAN Discovery (UDP 45832)" -Direction Inbound -Action Allow -Protocol UDP -LocalPort 45832 -Profile Private,Domain
+  ```
 - Installer attempts to add a firewall allow rule named `Soulman LAN Discovery (UDP 45832)` for inbound UDP 45832 on Private/Domain profiles so LAN peers can respond; if blocked or declined, add the rule manually.
 
 ## Scan flow & safety
@@ -56,6 +61,7 @@ Defaults (override via config, CLI, or env):
 - Tray icon (uses `soulman.ico`) gives:
   - Header shows the current version (ClickOnce version when deployed)
   - Other Soulman Instances shows peers discovered on the local network as `Soulman <version> on <HOSTNAME>`; uses a quick UDP broadcast on port 45832 and a Refresh item to rescan.
+    - Discovery sends to directed broadcast, limited broadcast, and multicast `239.255.64.64`; replies also go back to the sender’s source port in case inbound 45832 is blocked.
   - Set Source Folder / Set Destination Folder (persisted to `%LOCALAPPDATA%\Soulman\paths.json`)
   - Add Clone Destination (UNC/network paths allowed) to mirror the organized library
   - Open Source / Destination folders
