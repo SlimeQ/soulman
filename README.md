@@ -11,6 +11,7 @@ Background .NET service that watches a Soulseek downloads folder (e.g. `Document
 - Runs as a console app or Windows service; tray icon for quick controls and clone destinations.
 - Clone destinations mirror the organized library to network shares/other drives.
 - Move log UI shows recent moves (last 24h) including clone copies.
+- Responds to LAN discovery so the tray can show other running Soulman hosts (UDP broadcast on port 45832; needs inbound allow on Private/Domain networks).
 - Enforces a single running instance; duplicate launches exit immediately.
 
 ## Quickstart
@@ -42,6 +43,7 @@ Defaults (override via config, CLI, or env):
   .\install.ps1
   ```
 - Optional flags: `-Configuration` (default `Release`), `-PublishProfile` (defaults to `src/Soulman/Properties/PublishProfiles/WinClickOnce.pubxml`), `-ApplicationRevision`, `-CleanOutput` (wipe prior publish folders before building).
+- Installer attempts to add a firewall allow rule named `Soulman LAN Discovery (UDP 45832)` for inbound UDP 45832 on Private/Domain profiles so LAN peers can respond; if blocked or declined, add the rule manually.
 
 ## Scan flow & safety
 - Enumerates the configured source folders (skips anything that is the destination or sits inside the destination/clone trees) and only looks at supported extensions.
@@ -53,8 +55,9 @@ Defaults (override via config, CLI, or env):
 ### Tray, clones, and logs
 - Tray icon (uses `soulman.ico`) gives:
   - Header shows the current version (ClickOnce version when deployed)
-  - Set Source Folder… / Set Destination Folder… (persisted to `%LOCALAPPDATA%\Soulman\paths.json`)
-  - Add Clone Destination… (UNC/network paths allowed) to mirror the organized library
+  - Other Soulman Instances shows peers discovered on the local network as `Soulman <version> on <HOSTNAME>`; uses a quick UDP broadcast on port 45832 and a Refresh item to rescan.
+  - Set Source Folder / Set Destination Folder (persisted to `%LOCALAPPDATA%\Soulman\paths.json`)
+  - Add Clone Destination (UNC/network paths allowed) to mirror the organized library
   - Open Source / Destination folders
   - Open Move Log (last 24h, includes clone copies)
   - Run on Startup toggle (adds/removes a shortcut in `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`)

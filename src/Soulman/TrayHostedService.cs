@@ -7,7 +7,6 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using System.Reflection;
 using Microsoft.Extensions.Options;
 
 namespace Soulman;
@@ -20,6 +19,7 @@ public class TrayHostedService : IHostedService, IDisposable
     private readonly PathPreferenceStore _pathStore;
     private readonly MoveNotificationBroker _moveBroker;
     private readonly MoveLogStore _moveLog;
+    private readonly InstanceDiscovery _discovery;
     private Thread? _uiThread;
     private TrayApplicationContext? _context;
     private readonly ManualResetEventSlim _started = new(false);
@@ -30,7 +30,8 @@ public class TrayHostedService : IHostedService, IDisposable
         CloneFolderStore cloneStore,
         PathPreferenceStore pathStore,
         MoveNotificationBroker moveBroker,
-        MoveLogStore moveLog)
+        MoveLogStore moveLog,
+        InstanceDiscovery discovery)
     {
         _logger = logger;
         _options = options;
@@ -38,6 +39,7 @@ public class TrayHostedService : IHostedService, IDisposable
         _pathStore = pathStore;
         _moveBroker = moveBroker;
         _moveLog = moveLog;
+        _discovery = discovery;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -68,7 +70,8 @@ public class TrayHostedService : IHostedService, IDisposable
                 icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             }
 
-            _context = new TrayApplicationContext(_options, _cloneStore, _pathStore, _moveBroker, _moveLog, icon);
+            _context = new TrayApplicationContext(_logger, _options, _cloneStore, _pathStore, _moveBroker, _moveLog,
+                _discovery, icon);
             _started.Set();
             Application.Run(_context);
         }
@@ -106,24 +109,33 @@ public class TrayHostedService : IHostedService, IDisposable
 
 internal class TrayApplicationContext : ApplicationContext
 {
+    private static readonly TimeSpan InstanceDiscoveryTimeout = TimeSpan.FromSeconds(2);
+    private readonly ILogger<TrayHostedService> _logger;
     private readonly IOptionsMonitor<SoulmanSettings> _options;
     private readonly CloneFolderStore _cloneStore;
     private readonly PathPreferenceStore _pathStore;
     private readonly MoveNotificationBroker _moveBroker;
     private readonly MoveLogStore _moveLog;
+    private readonly InstanceDiscovery _discovery;
     private readonly NotifyIcon _notifyIcon;
     private readonly ContextMenuStrip _menu;
     private readonly string _startupShortcutPath;
     private readonly SynchronizationContext? _uiContext;
+    private ToolStripMenuItem? _instancesMenu;
+    private int _instanceRefreshInFlight;
 
-    public TrayApplicationContext(IOptionsMonitor<SoulmanSettings> options, CloneFolderStore cloneStore,
-        PathPreferenceStore pathStore, MoveNotificationBroker moveBroker, MoveLogStore moveLog, Icon? icon)
+    public TrayApplicationContext(ILogger<TrayHostedService> logger, IOptionsMonitor<SoulmanSettings> options,
+        CloneFolderStore cloneStore,
+        PathPreferenceStore pathStore, MoveNotificationBroker moveBroker, MoveLogStore moveLog,
+        InstanceDiscovery discovery, Icon? icon)
     {
+        _logger = logger;
         _options = options;
         _cloneStore = cloneStore;
         _pathStore = pathStore;
         _moveBroker = moveBroker;
         _moveLog = moveLog;
+        _discovery = discovery;
         _menu = new ContextMenuStrip();
         _uiContext = SynchronizationContext.Current;
         _startupShortcutPath = Path.Combine(
@@ -157,7 +169,13 @@ internal class TrayApplicationContext : ApplicationContext
         var sourcePath = prefs.SourcePath ?? settings.SourcePath;
         var destPath = prefs.DestinationPath ?? settings.DestinationPath;
 
-        _menu.Items.Add(new ToolStripMenuItem(GetVersionLabel()) { Enabled = false });
+        _menu.Items.Add(new ToolStripMenuItem(SoulmanVersion.GetLabel()) { Enabled = false });
+        _menu.Items.Add(new ToolStripSeparator());
+
+        _instancesMenu = new ToolStripMenuItem("Other Soulman Instances");
+        _instancesMenu.DropDownItems.Add(new ToolStripMenuItem("Searching...") { Enabled = false });
+        _instancesMenu.DropDownOpening += async (_, _) => await RefreshInstancesAsync();
+        _menu.Items.Add(_instancesMenu);
         _menu.Items.Add(new ToolStripSeparator());
 
         var addItem = new ToolStripMenuItem("Add Clone Destination...");
@@ -222,6 +240,89 @@ internal class TrayApplicationContext : ApplicationContext
         _menu.Items.Add(exit);
 
         _notifyIcon.ContextMenuStrip = _menu;
+    }
+
+    private async Task RefreshInstancesAsync()
+    {
+        if (_instancesMenu == null)
+        {
+            return;
+        }
+
+        if (Interlocked.Exchange(ref _instanceRefreshInFlight, 1) == 1)
+        {
+            return;
+        }
+
+        try
+        {
+            PostToUi(() => SetInstanceMenuItems(new List<ToolStripItem>
+            {
+                new ToolStripMenuItem("Searching...") { Enabled = false }
+            }));
+
+            IReadOnlyCollection<DiscoveredInstance> instances;
+            try
+            {
+                instances = await _discovery.DiscoverAsync(InstanceDiscoveryTimeout, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to discover other Soulman instances");
+                PostToUi(() => SetInstanceMenuItems(new List<ToolStripItem>
+                {
+                    new ToolStripMenuItem("Discovery failed; try refresh") { Enabled = false }
+                }));
+                return;
+            }
+
+            var items = instances
+                .OrderBy(i => i.MachineName, StringComparer.OrdinalIgnoreCase)
+                .Select(instance =>
+                {
+                    var label = BuildInstanceLabel(instance);
+                    var item = new ToolStripMenuItem(label) { Enabled = false };
+                    item.ToolTipText = instance.EndPoint.ToString();
+                    return item;
+                })
+                .ToList();
+
+            if (items.Count == 0)
+            {
+                items.Add(new ToolStripMenuItem("No other instances found") { Enabled = false });
+            }
+
+            PostToUi(() => SetInstanceMenuItems(items));
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _instanceRefreshInFlight, 0);
+        }
+    }
+
+    private void SetInstanceMenuItems(IReadOnlyCollection<ToolStripItem> items)
+    {
+        if (_instancesMenu == null)
+        {
+            return;
+        }
+
+        _instancesMenu.DropDownItems.Clear();
+        foreach (var item in items)
+        {
+            _instancesMenu.DropDownItems.Add(item);
+        }
+
+        _instancesMenu.DropDownItems.Add(new ToolStripSeparator());
+        var refresh = new ToolStripMenuItem("Refresh");
+        refresh.Click += async (_, _) => await RefreshInstancesAsync();
+        _instancesMenu.DropDownItems.Add(refresh);
+    }
+
+    private static string BuildInstanceLabel(DiscoveredInstance instance)
+    {
+        var versionSuffix = string.IsNullOrWhiteSpace(instance.Version) ? string.Empty : $" {instance.Version}";
+        return $"Soulman{versionSuffix} on {instance.MachineName}";
     }
 
     private void SetSourceFolder()
@@ -496,136 +597,5 @@ internal class TrayApplicationContext : ApplicationContext
     private void Notify(string title, string message, ToolTipIcon icon)
     {
         PostToUi(() => _notifyIcon.ShowBalloonTip(3000, title, message, icon));
-    }
-
-    private static string GetVersionLabel()
-    {
-        try
-        {
-            var releaseTag = TryGetAssemblyMetadata("ReleaseTag");
-            if (!string.IsNullOrWhiteSpace(releaseTag))
-            {
-                return $"Soulman {releaseTag}";
-            }
-
-            var clickOnceVersion = TryGetClickOnceVersion();
-            if (!string.IsNullOrWhiteSpace(clickOnceVersion))
-            {
-                return $"Soulman {clickOnceVersion}";
-            }
-
-            var productVersion = TryGetProductVersion();
-            if (!string.IsNullOrWhiteSpace(productVersion))
-            {
-                return $"Soulman {productVersion}";
-            }
-
-            var info = Assembly.GetExecutingAssembly()
-                .GetCustomAttributes<AssemblyInformationalVersionAttribute>()
-                .FirstOrDefault()?.InformationalVersion;
-
-            if (!string.IsNullOrWhiteSpace(info))
-            {
-                return $"Soulman {TrimMetadata(info)}";
-            }
-
-            var ver = Assembly.GetExecutingAssembly().GetName().Version;
-            if (ver != null)
-            {
-                return $"Soulman {TrimMetadata(ver.ToString())}";
-            }
-        }
-        catch
-        {
-            // ignore and fallback
-        }
-
-        return "Soulman";
-    }
-
-    private static string? TryGetAssemblyMetadata(string key)
-    {
-        try
-        {
-            var attrs = Assembly.GetExecutingAssembly()
-                .GetCustomAttributes<AssemblyMetadataAttribute>()
-                .Where(a => string.Equals(a.Key, key, StringComparison.OrdinalIgnoreCase))
-                .ToArray();
-            return attrs.FirstOrDefault()?.Value;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static string? TryGetProductVersion()
-    {
-        try
-        {
-            var path = Assembly.GetExecutingAssembly().Location;
-            if (string.IsNullOrWhiteSpace(path))
-            {
-                return null;
-            }
-
-            var ver = FileVersionInfo.GetVersionInfo(path).ProductVersion;
-            return TrimMetadata(ver);
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static string? TryGetClickOnceVersion()
-    {
-        try
-        {
-            var deploymentAsm = Assembly.Load("System.Deployment, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a");
-            var type = deploymentAsm?.GetType("System.Deployment.Application.ApplicationDeployment");
-            if (type == null)
-            {
-                return null;
-            }
-
-            var isNetworkDeployedProp = type.GetProperty("IsNetworkDeployed", BindingFlags.Public | BindingFlags.Static);
-            if (isNetworkDeployedProp == null)
-            {
-                return null;
-            }
-
-            var isNetworkDeployed = isNetworkDeployedProp.GetValue(null) as bool?;
-            if (isNetworkDeployed != true)
-            {
-                return null;
-            }
-
-            var currentDeploymentProp = type.GetProperty("CurrentDeployment", BindingFlags.Public | BindingFlags.Static);
-            var currentDeployment = currentDeploymentProp?.GetValue(null);
-            if (currentDeployment == null)
-            {
-                return null;
-            }
-
-            var versionProp = currentDeployment.GetType().GetProperty("CurrentVersion");
-            var versionValue = versionProp?.GetValue(currentDeployment)?.ToString();
-            return versionValue;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static string TrimMetadata(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return string.Empty;
-        }
-
-        var core = value.Split('+')[0];
-        return core;
     }
 }

@@ -27,6 +27,8 @@ builder.Services.AddSingleton<CloneFolderStore>();
 builder.Services.AddSingleton<PathPreferenceStore>();
 builder.Services.AddSingleton<MoveNotificationBroker>();
 builder.Services.AddSingleton<MoveLogStore>();
+builder.Services.AddSingleton<InstanceDiscovery>();
+builder.Services.AddHostedService(provider => provider.GetRequiredService<InstanceDiscovery>());
 builder.Services.AddHostedService<Worker>();
 if (OperatingSystem.IsWindows() && Environment.UserInteractive)
 {
