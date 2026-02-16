@@ -4,6 +4,8 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Net.NetworkInformation;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace Soulman;
 
@@ -103,13 +105,13 @@ public class InstanceDiscovery : IHostedService, IDisposable
             {
                 try
                 {
-            var result = await _listener.ReceiveAsync().WaitAsync(token);
-            await HandleMessageAsync(result, token);
-        }
-        catch (OperationCanceledException)
-        {
-            break;
-        }
+                    var result = await _listener.ReceiveAsync(token);
+                    await HandleMessageAsync(result, token);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
                 catch (Exception ex)
                 {
                     if (!token.IsCancellationRequested)
@@ -181,12 +183,12 @@ public class InstanceDiscovery : IHostedService, IDisposable
         {
             if (_listener != null)
             {
-                await _listener.SendAsync(bytes, bytes.Length, replyEndpoint).WaitAsync(token);
+                await _listener.SendAsync(bytes, replyEndpoint, token);
 
                 // also reply to the sender's source port so we work even when inbound 45832 is blocked
                 if (!replyEndpoint.Equals(result.RemoteEndPoint))
                 {
-                    await _listener.SendAsync(bytes, bytes.Length, result.RemoteEndPoint).WaitAsync(token);
+                    await _listener.SendAsync(bytes, result.RemoteEndPoint, token);
                 }
             }
         }
@@ -196,7 +198,7 @@ public class InstanceDiscovery : IHostedService, IDisposable
         }
     }
 
-    public async Task<IReadOnlyCollection<DiscoveredInstance>> DiscoverAsync(
+    private async Task<IReadOnlyCollection<DiscoveredInstance>> DiscoverAsync(
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
@@ -220,7 +222,7 @@ public class InstanceDiscovery : IHostedService, IDisposable
                 {
                     try
                     {
-                        await udp.SendAsync(probeBytes, endpoint);
+                        await udp.SendAsync(probeBytes, endpoint, cancellationToken);
                     }
                     catch (Exception ex)
                     {
@@ -243,7 +245,7 @@ public class InstanceDiscovery : IHostedService, IDisposable
         {
             try
             {
-                var response = await udp.ReceiveAsync().WaitAsync(linked.Token);
+                var response = await udp.ReceiveAsync(linked.Token);
                 var message = Encoding.UTF8.GetString(response.Buffer);
                 TryHandleResponse(message, response.RemoteEndPoint);
             }
@@ -261,7 +263,7 @@ public class InstanceDiscovery : IHostedService, IDisposable
         return finished?.Results ?? Array.Empty<DiscoveredInstance>();
     }
 
-    private static IReadOnlyCollection<IPEndPoint> GetBroadcastEndpoints()
+    private static IEnumerable<IPEndPoint> GetBroadcastEndpoints()
     {
         var endpoints = new HashSet<IPEndPoint>();
 

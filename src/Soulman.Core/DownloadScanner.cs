@@ -3,8 +3,10 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using TagLib;
 
 namespace Soulman;
@@ -16,26 +18,29 @@ public class DownloadScanner
     private readonly ConcurrentDictionary<string, FileObservation> _observed = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _protectedPathWarnings = new(StringComparer.OrdinalIgnoreCase);
 
+    // Heuristics
+    private static readonly Regex TvSeasonEpisode = new(@"(.*?)[ .]S(\d{1,2})E(\d{1,2})", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex MovieYear = new(@"(.*?)[ .]\(?(\d{4})\)?", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     public DownloadScanner(ILogger<DownloadScanner> logger, MoveLogStore moveLog)
     {
         _logger = logger;
         _moveLog = moveLog;
     }
 
-    public async Task<int> ScanAsync(SoulmanSettings settings, IReadOnlyCollection<string> cloneDestinations,
-        CancellationToken token)
+    public async Task<int> ScanAsync(SoulmanSettings settings, CancellationToken token)
     {
         if (!ValidateSettings(settings))
         {
             return 0;
         }
 
-        var destination = Path.GetFullPath(settings.DestinationPath!);
-        var cloneRoots = NormalizePaths(cloneDestinations)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        var protectedRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { destination };
-        protectedRoots.UnionWith(cloneRoots);
+        // Determine protected roots (destinations)
+        var protectedRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (settings.MusicLibraryPath != null) protectedRoots.Add(Path.GetFullPath(settings.MusicLibraryPath));
+        if (settings.MoviesLibraryPath != null) protectedRoots.Add(Path.GetFullPath(settings.MoviesLibraryPath));
+        if (settings.TvLibraryPath != null) protectedRoots.Add(Path.GetFullPath(settings.TvLibraryPath));
+
         var sources = GatherSources(settings).ToArray();
 
         if (sources.Length == 0)
@@ -44,30 +49,29 @@ public class DownloadScanner
             return 0;
         }
 
+        // Filter sources that might overlap with destinations
         var allowedSources = sources
             .Where(s =>
             {
-                if (IsSubPath(destination, s))
+                foreach (var dest in protectedRoots)
                 {
-                    _logger.LogWarning("Destination {Destination} sits under source {Source}; skipping to avoid loops",
-                        destination, s);
-                    return false;
+                    if (IsSubPath(dest, s))
+                    {
+                        _logger.LogWarning("Destination {Destination} sits under source {Source}; skipping to avoid loops", dest, s);
+                        return false;
+                    }
+                    if (IsSubPath(s, dest))
+                    {
+                        _logger.LogWarning("Source {Source} sits under destination {Destination}; skipping to avoid moving library files", s, dest);
+                        return false;
+                    }
                 }
-
-                if (IsSubPath(s, destination))
-                {
-                    _logger.LogWarning("Source {Source} sits under destination {Destination}; skipping to avoid moving library files",
-                        s, destination);
-                    return false;
-                }
-
                 return true;
             })
             .ToArray();
 
         if (allowedSources.Length == 0)
         {
-            _logger.LogWarning("No valid sources after filtering unsafe destinations");
             return 0;
         }
 
@@ -84,13 +88,10 @@ public class DownloadScanner
                         {
                             if (_protectedPathWarnings.Add(protectedRoot))
                             {
-                                _logger.LogWarning("Skipping files under protected path {ProtectedPath} to prevent data loss",
-                                    protectedRoot);
+                                _logger.LogWarning("Skipping files under protected path {ProtectedPath}", protectedRoot);
                             }
-
                             return false;
                         }
-
                         return true;
                     }));
             }
@@ -100,12 +101,9 @@ public class DownloadScanner
             }
         }
 
-        if (files.Count == 0)
-        {
-            return 0;
-        }
+        if (files.Count == 0) return 0;
 
-        var movedCount = 0;
+        // Cleanup observed cache
         var now = DateTimeOffset.UtcNow;
         var existing = new HashSet<string>(files, StringComparer.OrdinalIgnoreCase);
         foreach (var tracked in _observed.Keys)
@@ -116,21 +114,16 @@ public class DownloadScanner
             }
         }
 
+        var movedCount = 0;
         foreach (var file in files)
         {
-            if (token.IsCancellationRequested)
-            {
-                break;
-            }
+            if (token.IsCancellationRequested) break;
 
             FileInfo info;
             try
             {
                 info = new FileInfo(file);
-                if (!info.Exists)
-                {
-                    continue;
-                }
+                if (!info.Exists) continue;
             }
             catch (Exception ex)
             {
@@ -158,7 +151,7 @@ public class DownloadScanner
                 continue;
             }
 
-            if (await ProcessStableFileAsync(info, destination, cloneRoots, token))
+            if (await ProcessStableFileAsync(info, settings, token))
             {
                 movedCount++;
             }
@@ -191,36 +184,76 @@ public class DownloadScanner
         return set;
     }
 
-    private async Task<bool> ProcessStableFileAsync(FileInfo info, string destinationRoot,
-        IReadOnlyCollection<string> cloneDestinations, CancellationToken token)
+    private async Task<bool> ProcessStableFileAsync(FileInfo info, SoulmanSettings settings, CancellationToken token)
     {
-        if (token.IsCancellationRequested)
-        {
-            return false;
-        }
+        if (token.IsCancellationRequested) return false;
 
         try
         {
-            var metadata = ReadTags(info);
-            var targetPath = BuildDestinationPath(destinationRoot, metadata, info);
+            string? targetPath = null;
+
+            if (IsMusic(info.Extension))
+            {
+                if (settings.GatherMusic && !string.IsNullOrWhiteSpace(settings.MusicLibraryPath))
+                {
+                    var metadata = ReadTags(info);
+                    targetPath = BuildMusicPath(settings.MusicLibraryPath, metadata, info);
+                }
+            }
+            else if (IsVideo(info.Extension))
+            {
+                // Heuristic: TV vs Movie
+                if (TryGetTvInfo(info.Name, out var show, out var season, out var episode))
+                {
+                    if (settings.GatherTV && !string.IsNullOrWhiteSpace(settings.TvLibraryPath))
+                    {
+                        targetPath = BuildTvPath(settings.TvLibraryPath, show, season, episode, info);
+                    }
+                }
+                else
+                {
+                    // Assume Movie
+                    if (settings.GatherMovies && !string.IsNullOrWhiteSpace(settings.MoviesLibraryPath))
+                    {
+                        TryGetMovieInfo(info.Name, out var title, out var year);
+                        targetPath = BuildMoviePath(settings.MoviesLibraryPath, title, year, info);
+                    }
+                }
+            }
+            else if (IsSubtitle(info.Extension))
+            {
+                // Subtitle sidecar logic: try to put it where the video would go
+                // This mimics the video logic but for subs
+                if (TryGetTvInfo(info.Name, out var show, out var season, out var episode))
+                {
+                     if (settings.GatherTV && !string.IsNullOrWhiteSpace(settings.TvLibraryPath))
+                    {
+                        targetPath = BuildTvPath(settings.TvLibraryPath, show, season, episode, info);
+                    }
+                }
+                else
+                {
+                     if (settings.GatherMovies && !string.IsNullOrWhiteSpace(settings.MoviesLibraryPath))
+                    {
+                        TryGetMovieInfo(info.Name, out var title, out var year);
+                        targetPath = BuildMoviePath(settings.MoviesLibraryPath, title, year, info);
+                    }
+                }
+            }
+
+            if (string.IsNullOrEmpty(targetPath)) return false;
 
             Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
-
             var finalPath = EnsureUniquePath(targetPath);
             var originalPath = info.FullName;
+            
             System.IO.File.Move(originalPath, finalPath);
             _logger.LogInformation("Moved {Source} -> {Destination}", originalPath, finalPath);
-            var clones = ReplicateClones(finalPath, destinationRoot, cloneDestinations);
-            _moveLog.Add(new MoveEntry(DateTimeOffset.UtcNow, originalPath, finalPath, clones));
+            
+            // No clone logic anymore
+            
+            _moveLog.Add(new MoveEntry(DateTimeOffset.UtcNow, originalPath, finalPath, Array.Empty<string>()));
             return true;
-        }
-        catch (IOException ex)
-        {
-            _logger.LogWarning(ex, "IO failure while moving {File}", info.FullName);
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            _logger.LogWarning(ex, "Access denied while moving {File}", info.FullName);
         }
         catch (Exception ex)
         {
@@ -231,6 +264,65 @@ public class DownloadScanner
         return false;
     }
 
+    private static bool IsMusic(string ext) => 
+        new[] { ".mp3", ".flac", ".wav", ".aac", ".m4a", ".ogg", ".aiff", ".alac", ".opus", ".wv", ".ape" }
+        .Contains(ext, StringComparer.OrdinalIgnoreCase);
+
+    private static bool IsVideo(string ext) =>
+        new[] { ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm" }
+        .Contains(ext, StringComparer.OrdinalIgnoreCase);
+
+    private static bool IsSubtitle(string ext) =>
+        new[] { ".srt", ".ass", ".sub", ".ssa", ".vtt" }
+        .Contains(ext, StringComparer.OrdinalIgnoreCase);
+
+    private static bool TryGetTvInfo(string filename, out string show, out int season, out int episode)
+    {
+        var match = TvSeasonEpisode.Match(filename);
+        if (match.Success)
+        {
+            show = match.Groups[1].Value.Replace(".", " ").Trim();
+            season = int.Parse(match.Groups[2].Value);
+            episode = int.Parse(match.Groups[3].Value);
+            return true;
+        }
+        show = "";
+        season = 0;
+        episode = 0;
+        return false;
+    }
+
+    private static void TryGetMovieInfo(string filename, out string title, out string year)
+    {
+        var match = MovieYear.Match(filename);
+        if (match.Success)
+        {
+            title = match.Groups[1].Value.Replace(".", " ").Trim();
+            year = match.Groups[2].Value;
+        }
+        else
+        {
+            title = Path.GetFileNameWithoutExtension(filename).Replace(".", " ").Trim();
+            year = "";
+        }
+    }
+
+    private static string BuildTvPath(string root, string show, int season, int episode, FileInfo info)
+    {
+        var showClean = SanitizePathSegment(show);
+        var seasonFolder = $"Season {season:00}";
+        var fileName = $"{showClean} S{season:00}E{episode:00}{info.Extension}";
+        return Path.Combine(root, showClean, seasonFolder, fileName);
+    }
+
+    private static string BuildMoviePath(string root, string title, string year, FileInfo info)
+    {
+        var titleClean = SanitizePathSegment(title);
+        var folder = string.IsNullOrEmpty(year) ? titleClean : $"{titleClean} ({year})";
+        return Path.Combine(root, folder, $"{folder}{info.Extension}");
+    }
+
+    // Existing Music Logic
     private static TrackMetadata ReadTags(FileInfo info)
     {
         var fallbackTitle = Path.GetFileNameWithoutExtension(info.Name);
@@ -256,7 +348,7 @@ public class DownloadScanner
         }
     }
 
-    private static string BuildDestinationPath(string destinationRoot, TrackMetadata metadata, FileInfo info)
+    private static string BuildMusicPath(string destinationRoot, TrackMetadata metadata, FileInfo info)
     {
         var artist = SanitizePathSegment(metadata.Artist);
         var album = SanitizePathSegment(metadata.Album);
@@ -281,74 +373,13 @@ public class DownloadScanner
         return string.IsNullOrWhiteSpace(cleaned) ? "Unknown" : cleaned;
     }
 
-    private static string? FirstNonEmpty(params string?[] values)
-    {
-        foreach (var value in values)
-        {
-            if (!string.IsNullOrWhiteSpace(value))
-            {
-                return value;
-            }
-        }
-
-        return null;
-    }
-
-    private IReadOnlyCollection<string> ReplicateClones(string primaryPath, string destinationRoot,
-        IReadOnlyCollection<string> cloneDestinations)
-    {
-        if (cloneDestinations == null || cloneDestinations.Count == 0)
-        {
-            return Array.Empty<string>();
-        }
-
-        string? relative;
-        try
-        {
-            relative = Path.GetRelativePath(destinationRoot, primaryPath);
-        }
-        catch
-        {
-            relative = Path.GetFileName(primaryPath);
-        }
-
-        var clonePaths = new List<string>();
-
-        foreach (var clone in cloneDestinations)
-        {
-            if (string.IsNullOrWhiteSpace(clone))
-            {
-                continue;
-            }
-
-            try
-            {
-                var cloneRoot = Path.GetFullPath(clone);
-                var clonePath = Path.Combine(cloneRoot, relative);
-                Directory.CreateDirectory(Path.GetDirectoryName(clonePath)!);
-                System.IO.File.Copy(primaryPath, clonePath, overwrite: true);
-                _logger.LogInformation("Cloned {Source} -> {CloneDest}", primaryPath, clonePath);
-                clonePaths.Add(clonePath);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to clone {Source} to {CloneRoot}", primaryPath, clone);
-            }
-        }
-
-        return clonePaths;
-    }
-
     private static string? ResolveAlbumArtist(Tag tag)
     {
         const string compilations = "Various Artists";
-
         var albumArtists = tag.AlbumArtists ?? Array.Empty<string>();
         var joinedAlbumArtists = tag.JoinedAlbumArtists;
-
         var albumArtist = albumArtists.FirstOrDefault(a => !string.IsNullOrWhiteSpace(a))
                           ?? FirstNonEmpty(tag.FirstAlbumArtist);
-
         var performer = tag.Performers?.FirstOrDefault(p => !string.IsNullOrWhiteSpace(p))
                         ?? FirstNonEmpty(tag.FirstPerformer);
 
@@ -364,17 +395,21 @@ public class DownloadScanner
         {
             return compilations;
         }
-
         return normalized;
+    }
+
+    private static string? FirstNonEmpty(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value)) return value;
+        }
+        return null;
     }
 
     private static string? TakeFirstToken(string? value)
     {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return value;
-        }
-
+        if (string.IsNullOrWhiteSpace(value)) return value;
         var separators = new[] { ';', ',', '/' };
         var idx = value.IndexOfAny(separators);
         return (idx > 0 ? value[..idx] : value).Trim();
@@ -382,10 +417,7 @@ public class DownloadScanner
 
     private static string EnsureUniquePath(string path)
     {
-        if (!System.IO.File.Exists(path))
-        {
-            return path;
-        }
+        if (!System.IO.File.Exists(path)) return path;
 
         var directory = Path.GetDirectoryName(path)!;
         var baseName = Path.GetFileNameWithoutExtension(path);
@@ -402,34 +434,6 @@ public class DownloadScanner
         return candidate;
     }
 
-    private static IEnumerable<string> NormalizePaths(IEnumerable<string>? paths)
-    {
-        if (paths == null)
-        {
-            yield break;
-        }
-
-        foreach (var path in paths)
-        {
-            if (string.IsNullOrWhiteSpace(path))
-            {
-                continue;
-            }
-
-            string? full;
-            try
-            {
-                full = Path.GetFullPath(path);
-            }
-            catch
-            {
-                continue;
-            }
-
-            yield return full;
-        }
-    }
-
     private static bool IsProtectedPath(string path, IReadOnlyCollection<string> protectedRoots, out string protectedRoot)
     {
         foreach (var root in protectedRoots)
@@ -440,7 +444,6 @@ public class DownloadScanner
                 return true;
             }
         }
-
         protectedRoot = string.Empty;
         return false;
     }
@@ -457,27 +460,9 @@ public class DownloadScanner
 
     private bool ValidateSettings(SoulmanSettings settings)
     {
-        if (string.IsNullOrWhiteSpace(settings.DestinationPath))
-        {
-            _logger.LogWarning("Destination path is not configured.");
-            return false;
-        }
-
-        var hasConfiguredSource = !string.IsNullOrWhiteSpace(settings.SourcePath)
-                                  || (settings.AdditionalSources?.Any() ?? false);
-
-        if (!hasConfiguredSource)
-        {
-            _logger.LogWarning("No source folders configured.");
-            return false;
-        }
-
-        Directory.CreateDirectory(settings.DestinationPath);
-        return true;
+        return !string.IsNullOrWhiteSpace(settings.SourcePath) || (settings.AdditionalSources?.Any() ?? false);
     }
 
     private record FileObservation(long Length, DateTimeOffset LastSeen);
-
-    private record TrackMetadata(string Artist, string Album, string Title, int? TrackNumber, int? DiscNumber,
-        int? DiscCount);
+    private record TrackMetadata(string Artist, string Album, string Title, int? TrackNumber, int? DiscNumber, int? DiscCount);
 }

@@ -1,4 +1,10 @@
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Soulman;
 
@@ -7,7 +13,6 @@ public class Worker : BackgroundService
     private readonly ILogger<Worker> _logger;
     private readonly IOptionsMonitor<SoulmanSettings> _options;
     private readonly DownloadScanner _scanner;
-    private readonly CloneFolderStore _cloneStore;
     private readonly PathPreferenceStore _pathStore;
     private readonly MoveNotificationBroker _moveBroker;
 
@@ -15,14 +20,12 @@ public class Worker : BackgroundService
         ILogger<Worker> logger,
         IOptionsMonitor<SoulmanSettings> options,
         DownloadScanner scanner,
-        CloneFolderStore cloneStore,
         PathPreferenceStore pathStore,
         MoveNotificationBroker moveBroker)
     {
         _logger = logger;
         _options = options;
         _scanner = scanner;
-        _cloneStore = cloneStore;
         _pathStore = pathStore;
         _moveBroker = moveBroker;
     }
@@ -35,14 +38,13 @@ public class Worker : BackgroundService
         while (!stoppingToken.IsCancellationRequested)
         {
             var effective = BuildEffectiveSettings();
-            var clones = _cloneStore.GetFolders();
 
             try
             {
-                var moved = await _scanner.ScanAsync(effective, clones, stoppingToken);
+                var moved = await _scanner.ScanAsync(effective, stoppingToken);
                 if (moved > 0)
                 {
-                    _moveBroker.Publish(moved, effective.DestinationPath ?? "<unset>");
+                    _moveBroker.Publish(moved, effective.MusicLibraryPath ?? "<unset>");
                 }
             }
             catch (Exception ex)
@@ -65,9 +67,11 @@ public class Worker : BackgroundService
 
     private void LogSettings(SoulmanSettings settings)
     {
-        _logger.LogInformation("Watching {Source} -> {Destination}; poll {PollSeconds}s, settle {SettleSeconds}s",
+        _logger.LogInformation("Watching {Source} -> Music:{Music}, Movies:{Movies}, TV:{TV}; poll {PollSeconds}s, settle {SettleSeconds}s",
             settings.SourcePath ?? "<unset>",
-            settings.DestinationPath ?? "<unset>",
+            settings.MusicLibraryPath ?? "<unset>",
+            settings.MoviesLibraryPath ?? "<unset>",
+            settings.TvLibraryPath ?? "<unset>",
             settings.PollInterval.TotalSeconds,
             settings.SettledWindow.TotalSeconds);
     }
@@ -80,11 +84,25 @@ public class Worker : BackgroundService
         return new SoulmanSettings
         {
             SourcePath = prefs.SourcePath ?? baseSettings.SourcePath,
-            DestinationPath = prefs.DestinationPath ?? baseSettings.DestinationPath,
+            // Map legacy/prefs DestinationPath to MusicLibraryPath
+            MusicLibraryPath = prefs.DestinationPath ?? baseSettings.MusicLibraryPath, // MusicLibraryPath defaults to old Dest logic in Settings class
+            
+            MoviesLibraryPath = baseSettings.MoviesLibraryPath,
+            TvLibraryPath = baseSettings.TvLibraryPath,
+            
+            GatherMusic = baseSettings.GatherMusic,
+            GatherMovies = baseSettings.GatherMovies,
+            GatherTV = baseSettings.GatherTV,
+            
+            DownloadFromSoulseek = baseSettings.DownloadFromSoulseek,
+            ReceiveFromPeers = baseSettings.ReceiveFromPeers,
+            KnownPeers = baseSettings.KnownPeers ?? new List<string>(),
+
             AdditionalSources = new List<string>(baseSettings.AdditionalSources ?? new List<string>()),
             AllowedExtensions = baseSettings.AllowedExtensions ?? Array.Empty<string>(),
             PollIntervalSeconds = baseSettings.PollIntervalSeconds,
-            SettledSeconds = baseSettings.SettledSeconds
+            SettledSeconds = baseSettings.SettledSeconds,
+            DiscoveryPort = baseSettings.DiscoveryPort
         };
     }
 }

@@ -1,4 +1,7 @@
+using System;
 using System.Threading;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Soulman;
 
 const string mutexName = "Global\\Soulman.Instance";
@@ -23,7 +26,6 @@ if (OperatingSystem.IsWindows())
 
 builder.Services.Configure<SoulmanSettings>(builder.Configuration.GetSection("Soulman"));
 builder.Services.AddSingleton<DownloadScanner>();
-builder.Services.AddSingleton<CloneFolderStore>();
 builder.Services.AddSingleton<PathPreferenceStore>();
 builder.Services.AddSingleton<MoveNotificationBroker>();
 builder.Services.AddSingleton<MoveLogStore>();

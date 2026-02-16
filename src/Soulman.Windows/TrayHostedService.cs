@@ -7,7 +7,11 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System;
+using System.Collections.Generic;
 
 namespace Soulman;
 
@@ -15,7 +19,6 @@ public class TrayHostedService : IHostedService, IDisposable
 {
     private readonly ILogger<TrayHostedService> _logger;
     private readonly IOptionsMonitor<SoulmanSettings> _options;
-    private readonly CloneFolderStore _cloneStore;
     private readonly PathPreferenceStore _pathStore;
     private readonly MoveNotificationBroker _moveBroker;
     private readonly MoveLogStore _moveLog;
@@ -27,7 +30,6 @@ public class TrayHostedService : IHostedService, IDisposable
     public TrayHostedService(
         ILogger<TrayHostedService> logger,
         IOptionsMonitor<SoulmanSettings> options,
-        CloneFolderStore cloneStore,
         PathPreferenceStore pathStore,
         MoveNotificationBroker moveBroker,
         MoveLogStore moveLog,
@@ -35,7 +37,6 @@ public class TrayHostedService : IHostedService, IDisposable
     {
         _logger = logger;
         _options = options;
-        _cloneStore = cloneStore;
         _pathStore = pathStore;
         _moveBroker = moveBroker;
         _moveLog = moveLog;
@@ -67,10 +68,11 @@ public class TrayHostedService : IHostedService, IDisposable
             }
             else
             {
-                icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+                // Fallback to extraction if file not found
+                try { icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
             }
 
-            _context = new TrayApplicationContext(_logger, _options, _cloneStore, _pathStore, _moveBroker, _moveLog,
+            _context = new TrayApplicationContext(_logger, _options, _pathStore, _moveBroker, _moveLog,
                 _discovery, icon);
             _started.Set();
             Application.Run(_context);
@@ -112,7 +114,6 @@ internal class TrayApplicationContext : ApplicationContext
     private static readonly TimeSpan InstanceDiscoveryTimeout = TimeSpan.FromSeconds(2);
     private readonly ILogger<TrayHostedService> _logger;
     private readonly IOptionsMonitor<SoulmanSettings> _options;
-    private readonly CloneFolderStore _cloneStore;
     private readonly PathPreferenceStore _pathStore;
     private readonly MoveNotificationBroker _moveBroker;
     private readonly MoveLogStore _moveLog;
@@ -125,13 +126,11 @@ internal class TrayApplicationContext : ApplicationContext
     private int _instanceRefreshInFlight;
 
     public TrayApplicationContext(ILogger<TrayHostedService> logger, IOptionsMonitor<SoulmanSettings> options,
-        CloneFolderStore cloneStore,
         PathPreferenceStore pathStore, MoveNotificationBroker moveBroker, MoveLogStore moveLog,
         InstanceDiscovery discovery, Icon? icon)
     {
         _logger = logger;
         _options = options;
-        _cloneStore = cloneStore;
         _pathStore = pathStore;
         _moveBroker = moveBroker;
         _moveLog = moveLog;
@@ -167,7 +166,7 @@ internal class TrayApplicationContext : ApplicationContext
         var settings = _options.CurrentValue;
         var prefs = _pathStore.Get();
         var sourcePath = prefs.SourcePath ?? settings.SourcePath;
-        var destPath = prefs.DestinationPath ?? settings.DestinationPath;
+        var destPath = prefs.DestinationPath ?? settings.MusicLibraryPath;
 
         _menu.Items.Add(new ToolStripMenuItem(SoulmanVersion.GetLabel()) { Enabled = false });
         _menu.Items.Add(new ToolStripSeparator());
@@ -178,34 +177,11 @@ internal class TrayApplicationContext : ApplicationContext
         _menu.Items.Add(_instancesMenu);
         _menu.Items.Add(new ToolStripSeparator());
 
-        var addItem = new ToolStripMenuItem("Add Clone Destination...");
-        addItem.Click += (_, _) => AddCloneFolder();
-        _menu.Items.Add(addItem);
-
-        var clones = _cloneStore.GetFolders();
-        if (clones.Count > 0)
-        {
-            var cloneMenu = new ToolStripMenuItem("Clone Destinations");
-            foreach (var folder in clones)
-            {
-                var item = new ToolStripMenuItem(folder);
-                item.Click += (_, _) => OpenFolder(folder);
-                cloneMenu.DropDownItems.Add(item);
-            }
-            _menu.Items.Add(cloneMenu);
-
-            var clearItem = new ToolStripMenuItem("Clear Clone Destinations");
-            clearItem.Click += (_, _) => { _cloneStore.Clear(); BuildMenu(); };
-            _menu.Items.Add(clearItem);
-        }
-
-        _menu.Items.Add(new ToolStripSeparator());
-
         var setSource = new ToolStripMenuItem($"Set Source Folder...{DisplayPathSuffix(sourcePath)}");
         setSource.Click += (_, _) => SetSourceFolder();
         _menu.Items.Add(setSource);
 
-        var setDest = new ToolStripMenuItem($"Set Destination Folder...{DisplayPathSuffix(destPath)}");
+        var setDest = new ToolStripMenuItem($"Set Music Library...{DisplayPathSuffix(destPath)}");
         setDest.Click += (_, _) => SetDestinationFolder();
         _menu.Items.Add(setDest);
 
@@ -213,7 +189,7 @@ internal class TrayApplicationContext : ApplicationContext
         openSource.Click += (_, _) => OpenFolder(sourcePath);
         _menu.Items.Add(openSource);
 
-        var openDest = new ToolStripMenuItem("Open Destination Folder");
+        var openDest = new ToolStripMenuItem("Open Music Library");
         openDest.Click += (_, _) => OpenFolder(destPath);
         _menu.Items.Add(openDest);
 
@@ -302,17 +278,9 @@ internal class TrayApplicationContext : ApplicationContext
 
     private void SetInstanceMenuItems(IReadOnlyCollection<ToolStripItem> items)
     {
-        if (_instancesMenu == null)
-        {
-            return;
-        }
-
+        if (_instancesMenu == null) return;
         _instancesMenu.DropDownItems.Clear();
-        foreach (var item in items)
-        {
-            _instancesMenu.DropDownItems.Add(item);
-        }
-
+        foreach (var item in items) _instancesMenu.DropDownItems.Add(item);
         _instancesMenu.DropDownItems.Add(new ToolStripSeparator());
         var refresh = new ToolStripMenuItem("Refresh");
         refresh.Click += async (_, _) => await RefreshInstancesAsync();
@@ -359,16 +327,8 @@ internal class TrayApplicationContext : ApplicationContext
 
     public void OnMove(int count, string destination)
     {
-        if (count <= 0)
-        {
-            return;
-        }
-
-        _notifyIcon.ShowBalloonTip(
-            4000,
-            "Soulman",
-            $"Moved {count} file{(count == 1 ? string.Empty : "s")} to {destination}",
-            ToolTipIcon.Info);
+        if (count <= 0) return;
+        _notifyIcon.ShowBalloonTip(4000, "Soulman", $"Moved {count} file{(count == 1 ? string.Empty : "s")} to {destination}", ToolTipIcon.Info);
     }
 
     private void OpenMoveLog()
@@ -380,77 +340,27 @@ internal class TrayApplicationContext : ApplicationContext
         }
         catch (Exception ex)
         {
-            _notifyIcon.ShowBalloonTip(
-                3000,
-                "Soulman",
-                $"Could not open move log: {ex.Message}",
-                ToolTipIcon.Warning);
+            _notifyIcon.ShowBalloonTip(3000, "Soulman", $"Could not open move log: {ex.Message}", ToolTipIcon.Warning);
         }
     }
 
     private static string DisplayPathSuffix(string? path)
     {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return string.Empty;
-        }
-
+        if (string.IsNullOrWhiteSpace(path)) return string.Empty;
         var name = Path.GetFileName(path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         return string.IsNullOrWhiteSpace(name) ? string.Empty : $" ({name})";
     }
 
-    private void AddCloneFolder()
-    {
-        using var dialog = new FolderBrowserDialog
-        {
-            Description = "Select a clone folder (network locations supported)",
-            UseDescriptionForTitle = true,
-            ShowNewFolderButton = true
-        };
-
-        if (dialog.ShowDialog() == DialogResult.OK)
-        {
-            if (_cloneStore.AddFolder(dialog.SelectedPath))
-            {
-                BuildMenu();
-            }
-            else
-            {
-                _notifyIcon.ShowBalloonTip(
-                    3000,
-                    "Soulman",
-                    "Folder already added or invalid.",
-                    ToolTipIcon.Info);
-            }
-        }
-    }
-
     private static void OpenFolder(string? path)
     {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return;
-        }
-
+        if (string.IsNullOrWhiteSpace(path)) return;
         try
         {
             var full = Path.GetFullPath(path);
-            if (!Directory.Exists(full))
-            {
-                Directory.CreateDirectory(full);
-            }
-
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "explorer.exe",
-                Arguments = $"\"{full}\"",
-                UseShellExecute = true
-            });
+            if (!Directory.Exists(full)) Directory.CreateDirectory(full);
+            Process.Start(new ProcessStartInfo { FileName = "explorer.exe", Arguments = $"\"{full}\"", UseShellExecute = true });
         }
-        catch
-        {
-            // swallow UI errors
-        }
+        catch { }
     }
 
     private bool IsStartupEnabled()
@@ -483,18 +393,10 @@ internal class TrayApplicationContext : ApplicationContext
         try
         {
             var target = Application.ExecutablePath;
-            if (string.IsNullOrWhiteSpace(target) || !File.Exists(target))
-            {
-                return false;
-            }
-
+            if (string.IsNullOrWhiteSpace(target) || !File.Exists(target)) return false;
             Directory.CreateDirectory(Path.GetDirectoryName(_startupShortcutPath)!);
             dynamic? shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell")!);
-            if (shell == null)
-            {
-                return false;
-            }
-
+            if (shell == null) return false;
             dynamic shortcut = shell.CreateShortcut(_startupShortcutPath);
             shortcut.TargetPath = target;
             shortcut.WorkingDirectory = Path.GetDirectoryName(target);
@@ -513,17 +415,10 @@ internal class TrayApplicationContext : ApplicationContext
     {
         try
         {
-            if (File.Exists(_startupShortcutPath))
-            {
-                File.Delete(_startupShortcutPath);
-            }
-
+            if (File.Exists(_startupShortcutPath)) File.Delete(_startupShortcutPath);
             return true;
         }
-        catch
-        {
-            return false;
-        }
+        catch { return false; }
     }
 
     private async Task UpdateToLatestAsync()
@@ -542,8 +437,7 @@ internal class TrayApplicationContext : ApplicationContext
             foreach (var asset in assets.EnumerateArray())
             {
                 var name = asset.GetProperty("name").GetString();
-                if (!string.IsNullOrWhiteSpace(name) &&
-                    name.EndsWith("soulman_installer.exe", StringComparison.OrdinalIgnoreCase))
+                if (!string.IsNullOrWhiteSpace(name) && name.EndsWith("soulman_installer.exe", StringComparison.OrdinalIgnoreCase))
                 {
                     downloadUrl = asset.GetProperty("browser_download_url").GetString();
                     break;
@@ -552,13 +446,9 @@ internal class TrayApplicationContext : ApplicationContext
 
             downloadUrl ??= assets.EnumerateArray()
                 .Select(a => a.GetProperty("browser_download_url").GetString())
-                .FirstOrDefault(u => !string.IsNullOrWhiteSpace(u) &&
-                                     u.EndsWith(".exe", StringComparison.OrdinalIgnoreCase));
+                .FirstOrDefault(u => !string.IsNullOrWhiteSpace(u) && u.EndsWith(".exe", StringComparison.OrdinalIgnoreCase));
 
-            if (string.IsNullOrWhiteSpace(downloadUrl))
-            {
-                throw new InvalidOperationException("No installer asset found on the latest release.");
-            }
+            if (string.IsNullOrWhiteSpace(downloadUrl)) throw new InvalidOperationException("No installer asset found on the latest release.");
 
             var tempPath = Path.Combine(Path.GetTempPath(), "soulman_installer.exe");
             await using (var target = System.IO.File.Create(tempPath))
@@ -568,12 +458,7 @@ internal class TrayApplicationContext : ApplicationContext
             }
 
             Notify("Soulman", "Launching installer...", ToolTipIcon.Info);
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = tempPath,
-                UseShellExecute = true
-            });
-
+            Process.Start(new ProcessStartInfo { FileName = tempPath, UseShellExecute = true });
             Environment.Exit(0);
         }
         catch (Exception ex)
@@ -584,14 +469,8 @@ internal class TrayApplicationContext : ApplicationContext
 
     private void PostToUi(Action action)
     {
-        if (_uiContext != null)
-        {
-            _uiContext.Post(_ => action(), null);
-        }
-        else
-        {
-            action();
-        }
+        if (_uiContext != null) _uiContext.Post(_ => action(), null);
+        else action();
     }
 
     private void Notify(string title, string message, ToolTipIcon icon)
