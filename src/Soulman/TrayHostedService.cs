@@ -228,6 +228,10 @@ internal class TrayApplicationContext : ApplicationContext
         openLog.Click += (_, _) => OpenMoveLog();
         _menu.Items.Add(openLog);
 
+        var openAppLogs = new ToolStripMenuItem("Open App Logs");
+        openAppLogs.Click += (_, _) => OpenAppLogs();
+        _menu.Items.Add(openAppLogs);
+
         var openTransfers = new ToolStripMenuItem("Open Transfers");
         openTransfers.Click += (_, _) => OpenTransfers();
         _menu.Items.Add(openTransfers);
@@ -396,6 +400,39 @@ internal class TrayApplicationContext : ApplicationContext
                 "Soulman",
                 $"Could not open move log: {ex.Message}",
                 ToolTipIcon.Warning);
+        }
+    }
+
+    private void OpenAppLogs()
+    {
+        try
+        {
+            var logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Soulman", "logs");
+            if (!Directory.Exists(logDir))
+            {
+                _notifyIcon.ShowBalloonTip(3000, "Soulman", "No logs found yet.", ToolTipIcon.Info);
+                return;
+            }
+
+            var latest = Directory.GetFiles(logDir, "soulman-*.log")
+                .OrderByDescending(File.GetLastWriteTime)
+                .FirstOrDefault();
+
+            if (latest == null)
+            {
+                _notifyIcon.ShowBalloonTip(3000, "Soulman", "No logs found yet.", ToolTipIcon.Info);
+                return;
+            }
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = latest,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            _notifyIcon.ShowBalloonTip(3000, "Soulman", $"Failed to open logs: {ex.Message}", ToolTipIcon.Warning);
         }
     }
 

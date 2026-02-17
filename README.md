@@ -12,6 +12,7 @@ Background .NET service that watches a Soulseek downloads folder (e.g. `Document
 - Clone destinations mirror the organized library to network shares/other drives.
 - Move log UI shows recent moves (last 24h) including clone copies.
 - Responds to LAN discovery so the tray can show other running Soulman hosts (UDP broadcast on port 45832; needs inbound allow on Private/Domain networks).
+- Discovers other Soulman peers on your LAN and pulls missing library files over TCP (default 45833); skips files that already exist locally.
 - Enforces a single running instance; duplicate launches exit immediately.
 
 ## Quickstart
@@ -48,6 +49,7 @@ Defaults (override via config, CLI, or env):
   ```powershell
   New-NetFirewallRule -DisplayName "Soulman LAN Discovery (UDP 45832)" -Direction Inbound -Action Allow -Protocol UDP -LocalPort 45832 -Profile Private,Domain
   ```
+  Allowing TCP 45833 inbound (Private/Domain) is required for peer sync to connect into this host.
 - Installer attempts to add a firewall allow rule named `Soulman LAN Discovery (UDP 45832)` for inbound UDP 45832 on Private/Domain profiles so LAN peers can respond; if blocked or declined, add the rule manually.
 
 ## Scan flow & safety

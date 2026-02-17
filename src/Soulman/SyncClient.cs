@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Net.Sockets;
 using System.Text;
@@ -32,41 +33,57 @@ public class SyncClient
     {
         if (peer.SyncPort <= 0) return;
 
+        var syncWatch = Stopwatch.StartNew();
         _logger.LogInformation("Starting sync with {Machine} at {Endpoint}:{Port}", peer.MachineName, peer.EndPoint.Address, peer.SyncPort);
 
+        List<RemoteFile>? remoteFiles = null;
+
+        // 1. Fetch File List
         try
         {
             using var client = new TcpClient();
-            // Set timeouts to prevent hanging forever on broken connections
-            client.ReceiveTimeout = 30000; // 30 seconds
-            client.SendTimeout = 30000;
+            // Use a specific timeout for the initial connection and list retrieval
+            using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+            connectCts.CancelAfter(TimeSpan.FromSeconds(15));
 
-            await client.ConnectAsync(peer.EndPoint.Address, peer.SyncPort, token);
+            await client.ConnectAsync(peer.EndPoint.Address, peer.SyncPort, connectCts.Token);
 
             await using var stream = client.GetStream();
             using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
             await using var writer = new StreamWriter(stream, Encoding.UTF8, leaveOpen: true) { AutoFlush = true };
 
-            // 1. Request File List
             await writer.WriteLineAsync("LIST");
-            var json = await reader.ReadLineAsync(token);
+            var json = await reader.ReadLineAsync(connectCts.Token);
 
-            if (string.IsNullOrEmpty(json))
+            if (!string.IsNullOrEmpty(json))
             {
-                _logger.LogWarning("Received empty file list from {Machine}", peer.MachineName);
-                return;
+                remoteFiles = JsonSerializer.Deserialize<List<RemoteFile>>(json);
             }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to fetch file list from {Machine}", peer.MachineName);
+            return;
+        }
 
-            var remoteFiles = JsonSerializer.Deserialize<List<RemoteFile>>(json);
-            if (remoteFiles == null) return;
+        if (remoteFiles == null || remoteFiles.Count == 0)
+        {
+            _logger.LogInformation("Peer {Machine} returned no files", peer.MachineName);
+            return;
+        }
 
-            _logger.LogInformation("Peer {Machine} has {Count} files", peer.MachineName, remoteFiles.Count);
+        _logger.LogInformation("Peer {Machine} has {Count} files", peer.MachineName, remoteFiles.Count);
 
-            var destination = _options.CurrentValue.DestinationPath;
-            if (string.IsNullOrEmpty(destination)) return;
+        var destination = _options.CurrentValue.DestinationPath;
+        if (string.IsNullOrEmpty(destination)) return;
 
-            int syncedCount = 0;
+        int syncedCount = 0;
+        TcpClient? transferClient = null;
+        StreamReader? transferReader = null;
+        StreamWriter? transferWriter = null;
 
+        try
+        {
             foreach (var file in remoteFiles)
             {
                 if (token.IsCancellationRequested) break;
@@ -74,44 +91,93 @@ public class SyncClient
                 var localPath = Path.Combine(destination, file.Path);
                 if (File.Exists(localPath))
                 {
-                    // Simple check: skip if exists. 
-                    // Future: Check size/date if we want to update modified files.
+                    _logger.LogDebug("Skipping existing file {Path}", file.Path);
                     continue;
                 }
 
-                _logger.LogInformation("Downloading {Path} ({Size} bytes)", file.Path, file.Size);
+                int retryCount = 0;
+                const int MaxRetries = 5;
 
-                await writer.WriteLineAsync($"GET {file.Path}");
-                var response = await reader.ReadLineAsync(token);
-                
-                if (response != null && response.StartsWith("OK"))
+                while (retryCount < MaxRetries && !token.IsCancellationRequested)
                 {
-                    var sizePart = response.Split(' ').Skip(1).FirstOrDefault();
-                    if (long.TryParse(sizePart, out var size))
+                    try
                     {
-                        await DownloadFileAsync(stream, localPath, size, token);
-                        _moveLog.Add(new MoveEntry(DateTimeOffset.UtcNow, $"Peer://{peer.MachineName}/{file.Path}", localPath, Array.Empty<string>()));
-                        syncedCount++;
+                        // Ensure connection
+                        if (transferClient == null || !transferClient.Connected)
+                        {
+                            transferClient = new TcpClient();
+                            transferClient.ReceiveTimeout = 60000;
+                            transferClient.SendTimeout = 60000;
+                            await transferClient.ConnectAsync(peer.EndPoint.Address, peer.SyncPort, token);
+
+                            var stream = transferClient.GetStream();
+                            transferReader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
+                            transferWriter = new StreamWriter(stream, Encoding.UTF8, leaveOpen: true) { AutoFlush = true };
+                        }
+
+                        _logger.LogInformation("Downloading {Path} ({Size} bytes) [Attempt {Attempt}/{Max}]", file.Path, file.Size, retryCount + 1, MaxRetries);
+
+                        await transferWriter!.WriteLineAsync($"GET {file.Path}");
+                        var response = await transferReader!.ReadLineAsync(token);
+
+                        if (response != null && response.StartsWith("OK"))
+                        {
+                            var sizePart = response.Split(' ').Skip(1).FirstOrDefault();
+                            if (long.TryParse(sizePart, out var size))
+                            {
+                                var fileWatch = Stopwatch.StartNew();
+                                await DownloadFileAsync(transferClient.GetStream(), localPath, size, token);
+                                
+                                _moveLog.Add(new MoveEntry(DateTimeOffset.UtcNow, $"Peer://{peer.MachineName}/{file.Path}", localPath, Array.Empty<string>()));
+                                syncedCount++;
+                                _logger.LogInformation("Finished {Path} ({Size} bytes) in {Elapsed}ms", file.Path, size, fileWatch.ElapsedMilliseconds);
+                                break; // Success, exit retry loop
+                            }
+                        }
+                        else
+                        {
+                            _logger.LogWarning("Failed to initiate download for {Path}: {Response}", file.Path, response);
+                            break; // Server rejected, do not retry
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        retryCount++;
+                        _logger.LogWarning("Download failed for {Path}: {Message}. Retrying in 2s... ({Attempt}/{Max})", file.Path, ex.Message, retryCount, MaxRetries);
+
+                        // Disconnect and force reconnect next attempt
+                        try { transferClient?.Dispose(); } catch { }
+                        transferClient = null;
+                        transferReader = null;
+                        transferWriter = null;
+
+                        if (retryCount >= MaxRetries)
+                        {
+                            _logger.LogError("Giving up on {Path} after {Max} attempts", file.Path, MaxRetries);
+                        }
+                        else
+                        {
+                            await Task.Delay(2000, token);
+                        }
                     }
                 }
-                else
-                {
-                    _logger.LogWarning("Failed to initiate download for {Path}: {Response}", file.Path, response);
-                }
+            }
+
+            if (transferWriter != null)
+            {
+                try { await transferWriter.WriteLineAsync("BYE"); } catch { }
             }
             
-            await writer.WriteLineAsync("BYE");
-            _logger.LogInformation("Sync with {Machine} complete. Downloaded {Count} files.", peer.MachineName, syncedCount);
-            
+            _logger.LogInformation("Sync with {Machine} complete in {Elapsed}s. Downloaded {Count} files.", peer.MachineName, syncWatch.Elapsed.TotalSeconds, syncedCount);
+
             if (syncedCount > 0)
             {
                 _moveBroker.Publish(syncedCount, destination);
             }
-
         }
-        catch (Exception ex)
+        finally
         {
-            _logger.LogError(ex, "Sync failed with {Machine}", peer.MachineName);
+            transferClient?.Dispose();
         }
     }
 
@@ -132,39 +198,42 @@ public class SyncClient
         {
             using (var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
             {
-                // We can't use CopyToAsync because we need to read exactly 'size' bytes, 
-                // and the stream stays open for further commands.
-                // CopyToAsync would wait for the stream to close.
-                
                 var buffer = new byte[81920]; // 80KB buffer
                 long remaining = size;
                 long totalRead = 0;
-                
-                using var cts = CancellationTokenSource.CreateLinkedTokenSource(token);
+
+                // Reusable CTS for performance
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
 
                 while (remaining > 0)
                 {
-                    // Reset timeout for each chunk
-                    cts.CancelAfter(TimeSpan.FromSeconds(30));
-
                     var readSize = (int)Math.Min(remaining, buffer.Length);
-                    
+
+                    // Reset timeout timer
+                    timeoutCts.CancelAfter(TimeSpan.FromSeconds(60));
+
                     int read;
-                    try 
+                    try
                     {
-                        read = await stream.ReadAsync(buffer, 0, readSize, cts.Token);
+                        read = await stream.ReadAsync(buffer, 0, readSize, timeoutCts.Token);
                     }
-                    catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                    catch (OperationCanceledException) when (!token.IsCancellationRequested && timeoutCts.IsCancellationRequested)
                     {
-                        throw new IOException("Read timed out");
+                        // Regenerate CTS if it was cancelled by timeout so we can reuse/cleanly exit (though we throw here)
+                        throw new IOException("Read timed out (60s without data)");
                     }
 
                     if (read == 0) throw new IOException("Unexpected end of stream");
                     await fileStream.WriteAsync(buffer, 0, read, token);
                     remaining -= read;
                     totalRead += read;
-                    
+
                     _progressBroker.Report(fileName, totalRead, size);
+                }
+
+                if (totalRead != size)
+                {
+                    throw new IOException($"Incomplete download for {fileName}: expected {size} bytes, got {totalRead}");
                 }
             }
 

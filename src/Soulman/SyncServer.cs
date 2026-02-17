@@ -159,7 +159,8 @@ public class SyncServer : IHostedService, IDisposable
     private async Task HandleGet(string relativePath, StreamWriter writer, NetworkStream stream)
     {
         // Security check: Prevent directory traversal
-        if (relativePath.Contains("..") || Path.IsPathRooted(relativePath))
+        // We rely primarily on the path anchoring check below, but we can do a quick check for explicit traversal sequences
+        if (relativePath.Contains("../") || relativePath.Contains("..\\") || Path.IsPathRooted(relativePath))
         {
             await writer.WriteLineAsync("ERROR Invalid path");
             return;
@@ -187,12 +188,24 @@ public class SyncServer : IHostedService, IDisposable
         }
 
         var info = new FileInfo(fullPath);
+        var remoteLabel = stream.Socket?.RemoteEndPoint?.ToString() ?? "<unknown>";
+        _logger.LogInformation("Serving {Path} ({Size} bytes) to {Remote}", relativePath, info.Length, remoteLabel);
         await writer.WriteLineAsync($"OK {info.Length}");
         
         // Important: Flush the writer buffer before writing raw bytes to the underlying stream
         await writer.FlushAsync();
 
         using var fileStream = File.OpenRead(fullPath);
-        await fileStream.CopyToAsync(stream);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            await fileStream.CopyToAsync(stream);
+            _logger.LogInformation("Finished serving {Path} in {Elapsed}ms", relativePath, sw.ElapsedMilliseconds);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error serving {Path} to {Remote}", relativePath, remoteLabel);
+            throw;
+        }
     }
 }

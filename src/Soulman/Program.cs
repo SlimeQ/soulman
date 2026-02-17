@@ -16,6 +16,10 @@ builder.Configuration
     .AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: true)
     .AddEnvironmentVariables(prefix: "SOULMAN_");
 
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
+builder.Logging.AddProvider(new Soulman.Logging.FileLoggerProvider());
+
 if (OperatingSystem.IsWindows())
 {
     builder.Services.AddWindowsService(options => options.ServiceName = "Soulman");

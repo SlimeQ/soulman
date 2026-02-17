@@ -43,7 +43,14 @@ public class SyncWorker : BackgroundService
                     foreach (var peer in peers)
                     {
                         if (stoppingToken.IsCancellationRequested) break;
-                        await _client.SyncWithPeerAsync(peer, stoppingToken);
+                        try
+                        {
+                            await _client.SyncWithPeerAsync(peer, stoppingToken);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, "Unhandled error while syncing with {Peer}", peer.MachineName);
+                        }
                     }
                 }
 
