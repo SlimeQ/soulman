@@ -29,6 +29,7 @@
   <ItemGroup Condition="!$(TargetFramework.Contains('windows'))">
     <Compile Remove="TrayHostedService.cs" />
     <Compile Remove="MoveLogForm.cs" />
+    <Compile Remove="TransferProgressForm.cs" />
   </ItemGroup>
 
   <ItemGroup>

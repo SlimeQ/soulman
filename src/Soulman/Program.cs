@@ -27,6 +27,10 @@ builder.Configuration
     .AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: true)
     .AddEnvironmentVariables(prefix: "SOULMAN_");
 
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
+builder.Logging.AddProvider(new Soulman.Logging.FileLoggerProvider());
+
 #if WINDOWS
 if (OperatingSystem.IsWindows())
 {
@@ -45,10 +49,14 @@ builder.Services.AddSingleton<CloneFolderStore>();
 builder.Services.AddSingleton<PathPreferenceStore>();
 builder.Services.AddSingleton<MoveNotificationBroker>();
 builder.Services.AddSingleton<MoveLogStore>();
+builder.Services.AddSingleton<TransferProgressBroker>();
+builder.Services.AddSingleton<SyncServer>();
+builder.Services.AddHostedService(provider => provider.GetRequiredService<SyncServer>());
+builder.Services.AddSingleton<SyncClient>();
+builder.Services.AddHostedService<SyncWorker>();
 builder.Services.AddSingleton<InstanceDiscovery>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<InstanceDiscovery>());
 builder.Services.AddHostedService<Worker>();
-builder.Services.AddHostedService<PeerSyncService>();
 
 #if WINDOWS
 if (OperatingSystem.IsWindows() && Environment.UserInteractive)

@@ -4,6 +4,12 @@ param(
     [switch]$SkipCacheClear
 )
 
+function Test-IsAdmin {
+    $id = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    $p = new-object System.Security.Principal.WindowsPrincipal($id)
+    return $p.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
 $ErrorActionPreference = 'Stop'
 $logPath = Join-Path $env:TEMP ("soulman_install_" + (Get-Date -Format "yyyyMMdd_HHmmss") + ".log")
 try { Start-Transcript -Path $logPath -Append -Force | Out-Null } catch {}
@@ -44,7 +50,7 @@ try {
             Write-Host "[install] Clearing ClickOnce cache (mage -cc) to avoid prior subscription conflicts..." -ForegroundColor Cyan
             & $mage -cc | Out-Null
         } else {
-            Write-Warning "mage.exe not found; skipping ClickOnce cache clear. If install complains about a different location, re-run with mage installed or uninstall the previous Soulman entry first."
+            Write-Host "[install] mage.exe not found; skipping ClickOnce cache clear. (This is normal for new installs)" -ForegroundColor DarkGray
         }
     }
 
@@ -98,23 +104,41 @@ finally {
 }
 
 function Try-EnsureFirewallRule {
-    try {
-        $ruleName = "Soulman LAN Discovery (UDP 45832)"
-        $existing = $null
-        if (Get-Command -Name Get-NetFirewallRule -ErrorAction SilentlyContinue) {
-            $existing = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
-        }
+    if (-not (Test-IsAdmin)) {
+        Write-Host "[install] Skipping firewall rules (Process is not running as Administrator)." -ForegroundColor Yellow
+        Write-Host "          You may see a Windows Firewall prompt when the application starts." -ForegroundColor Yellow
+        return
+    }
 
-        if (-not $existing) {
-            Write-Host "[install] Adding firewall rule '$ruleName' (Private/Domain, UDP 45832 inbound)" -ForegroundColor Cyan
-            if (Get-Command -Name New-NetFirewallRule -ErrorAction SilentlyContinue) {
-                New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Allow -Protocol UDP `
-                    -LocalPort 45832 -Profile Private,Domain -ErrorAction Stop | Out-Null
-            } else {
-                netsh advfirewall firewall add rule name="$ruleName" dir=in action=allow protocol=UDP localport=45832 profile=private,domain | Out-Null
+    $rules = @(
+        @{ Name="Soulman Discovery (UDP)"; Protocol="UDP"; Port="45832" },
+        @{ Name="Soulman Sync (TCP)";      Protocol="TCP"; Port="45833" }
+    )
+
+    foreach ($r in $rules) {
+        $ruleName = $r.Name
+        $protocol = $r.Protocol
+        $port = $r.Port
+
+        try {
+            $existing = $null
+            if (Get-Command -Name Get-NetFirewallRule -ErrorAction SilentlyContinue) {
+                $existing = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
             }
+
+            if (-not $existing) {
+                Write-Host "[install] Adding firewall rule '$ruleName' ($protocol $port Inbound)" -ForegroundColor Cyan
+                if (Get-Command -Name New-NetFirewallRule -ErrorAction SilentlyContinue) {
+                    New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Allow -Protocol $protocol `
+                        -LocalPort $port -Profile Private,Domain -ErrorAction Stop | Out-Null
+                } else {
+                    netsh advfirewall firewall add rule name="$ruleName" dir=in action=allow protocol=$protocol localport=$port profile=private,domain | Out-Null
+                }
+            }
+        } catch {
+            Write-Host "[install] Warning: Could not add firewall rule '$ruleName'." -ForegroundColor Yellow
+            Write-Host "          Error: $($_.Exception.Message)" -ForegroundColor DarkGray
+            Write-Host "          If LAN sync fails, please allow $protocol port $port manually." -ForegroundColor DarkGray
         }
-    } catch {
-        Write-Warning "Could not add firewall rule for Soulman discovery (UDP 45832). LAN peer discovery may be blocked until allowed manually. Error: $_"
     }
 }
