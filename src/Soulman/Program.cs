@@ -48,6 +48,7 @@ builder.Services.AddSingleton<MoveLogStore>();
 builder.Services.AddSingleton<InstanceDiscovery>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<InstanceDiscovery>());
 builder.Services.AddHostedService<Worker>();
+builder.Services.AddHostedService<PeerSyncService>();
 
 #if WINDOWS
 if (OperatingSystem.IsWindows() && Environment.UserInteractive)
