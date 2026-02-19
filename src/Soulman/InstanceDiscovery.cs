@@ -66,9 +66,9 @@ public class InstanceDiscovery : IHostedService, IDisposable
 
     public void Dispose()
     {
-        try { _cts.Cancel(); } catch (ObjectDisposedException) { }
+        _cts.Cancel();
         DisposeListener();
-        try { _cts.Dispose(); } catch (ObjectDisposedException) { }
+        _cts.Dispose();
     }
 
     private void DisposeListener()

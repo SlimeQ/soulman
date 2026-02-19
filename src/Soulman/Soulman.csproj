@@ -1,35 +1,20 @@
 <Project Sdk="Microsoft.NET.Sdk.Worker">
   <PropertyGroup>
-    <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('Windows'))">net8.0-windows;net8.0</TargetFrameworks>
-    <TargetFrameworks Condition="!$([MSBuild]::IsOSPlatform('Windows'))">net8.0</TargetFrameworks>
+    <TargetFramework>net8.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>dotnet-Soulman-3ae528ee-619e-40f6-bee6-4b6706b7dc04</UserSecretsId>
-    <ApplicationIcon Condition="$([MSBuild]::IsOSPlatform('Windows'))">soulman.ico</ApplicationIcon>
-    <OutputType>Exe</OutputType>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationIcon>soulman.ico</ApplicationIcon>
+    <OutputType>WinExe</OutputType>
     <AssemblyInformationalVersion Condition="'$(ReleaseTag)' != ''">$(ReleaseTag)</AssemblyInformationalVersion>
     <AssemblyInformationalVersion Condition="'$(ReleaseTag)' == ''">$(Version)</AssemblyInformationalVersion>
   </PropertyGroup>
 
-  <!-- Windows-only: WinForms for tray icon -->
-  <PropertyGroup Condition="$(TargetFramework.Contains('windows'))">
-    <UseWindowsForms>true</UseWindowsForms>
-    <OutputType>WinExe</OutputType>
-    <DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
-  </PropertyGroup>
-
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
-    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.0" Condition="$(TargetFramework.Contains('windows'))" />
-    <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" Version="8.0.1" Condition="!$(TargetFramework.Contains('windows'))" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.0" />
     <PackageReference Include="TagLibSharp" Version="2.3.0" />
-  </ItemGroup>
-
-  <!-- Exclude Windows-only source files on non-Windows targets -->
-  <ItemGroup Condition="!$(TargetFramework.Contains('windows'))">
-    <Compile Remove="TrayHostedService.cs" />
-    <Compile Remove="MoveLogForm.cs" />
-    <Compile Remove="TransferProgressForm.cs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -43,10 +28,7 @@
     <None Update="appsettings.Development.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <Content Include="soulman.ico" Condition="$([MSBuild]::IsOSPlatform('Windows'))">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="install-linux.sh">
+    <Content Include="soulman.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
