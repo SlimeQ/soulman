@@ -6,9 +6,12 @@ namespace Soulman;
 
 public class SoulmanSettings
 {
-    public string? SourcePath { get; set; } = GetDefaultSourcePath();
+    public string? SourcePath { get; set; } =
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            "Soulseek Downloads", "complete");
 
-    public string? DestinationPath { get; set; } = GetDefaultDestinationPath();
+    public string? DestinationPath { get; set; } =
+        Environment.GetFolderPath(Environment.SpecialFolder.MyMusic);
 
     public List<string> AdditionalSources { get; set; } = new();
 
@@ -34,33 +37,5 @@ public class SoulmanSettings
 
         var ext = Path.GetExtension(path);
         return AllowedExtensions.Any(a => string.Equals(a, ext, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static string? GetDefaultSourcePath()
-    {
-        if (OperatingSystem.IsWindows())
-        {
-            return Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-                "Soulseek Downloads", "complete");
-        }
-
-        // Linux/macOS: ~/Downloads/SoulmanIngress
-        return Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            "Downloads", "SoulmanIngress");
-    }
-
-    private static string? GetDefaultDestinationPath()
-    {
-        if (OperatingSystem.IsWindows())
-        {
-            return Environment.GetFolderPath(Environment.SpecialFolder.MyMusic);
-        }
-
-        // Linux/macOS: ~/Music
-        return Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            "Music");
     }
 }
