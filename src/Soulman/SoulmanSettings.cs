@@ -10,6 +10,10 @@ public class SoulmanSettings
 
     public string? DestinationPath { get; set; } = GetDefaultDestinationPath();
 
+    public string? MovieDestinationPath { get; set; } = GetDefaultMoviePath();
+
+    public string? TvDestinationPath { get; set; } = GetDefaultTvPath();
+
     public List<string> AdditionalSources { get; set; } = new();
 
     public int PollIntervalSeconds { get; set; } = 30;
@@ -21,20 +25,46 @@ public class SoulmanSettings
         ".mp3", ".flac", ".wav", ".aac", ".m4a", ".ogg", ".aiff", ".alac", ".opus", ".wv", ".ape"
     };
 
+    public string[] VideoExtensions { get; set; } =
+    {
+        ".mkv", ".mp4", ".avi", ".mov", ".webm", ".m4v", ".wmv", ".mpg", ".mpeg"
+    };
+
+    public string[] SubtitleExtensions { get; set; } =
+    {
+        ".srt", ".sub", ".ass", ".ssa", ".idx", ".vtt"
+    };
+
     public TimeSpan PollInterval => TimeSpan.FromSeconds(Math.Max(PollIntervalSeconds, 5));
 
     public TimeSpan SettledWindow => TimeSpan.FromSeconds(Math.Max(SettledSeconds, 5));
 
-    public bool IsSupportedFile(string path)
+    public bool IsAudioFile(string path)
     {
         if (string.IsNullOrWhiteSpace(path) || AllowedExtensions is null || AllowedExtensions.Length == 0)
-        {
             return false;
-        }
-
         var ext = Path.GetExtension(path);
         return AllowedExtensions.Any(a => string.Equals(a, ext, StringComparison.OrdinalIgnoreCase));
     }
+
+    public bool IsVideoFile(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || VideoExtensions is null || VideoExtensions.Length == 0)
+            return false;
+        var ext = Path.GetExtension(path);
+        return VideoExtensions.Any(a => string.Equals(a, ext, StringComparison.OrdinalIgnoreCase));
+    }
+
+    public bool IsSubtitleFile(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || SubtitleExtensions is null || SubtitleExtensions.Length == 0)
+            return false;
+        var ext = Path.GetExtension(path);
+        return SubtitleExtensions.Any(a => string.Equals(a, ext, StringComparison.OrdinalIgnoreCase));
+    }
+
+    public bool IsSupportedFile(string path) =>
+        IsAudioFile(path) || IsVideoFile(path) || IsSubtitleFile(path);
 
     private static string? GetDefaultSourcePath()
     {
@@ -54,13 +84,35 @@ public class SoulmanSettings
     private static string? GetDefaultDestinationPath()
     {
         if (OperatingSystem.IsWindows())
-        {
             return Environment.GetFolderPath(Environment.SpecialFolder.MyMusic);
-        }
 
         // Linux/macOS: ~/Music
         return Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             "Music");
+    }
+
+    private static string? GetDefaultMoviePath()
+    {
+        if (OperatingSystem.IsWindows())
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),
+                "Movies");
+
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "Videos", "Movies");
+    }
+
+    private static string? GetDefaultTvPath()
+    {
+        if (OperatingSystem.IsWindows())
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),
+                "TV");
+
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "Videos", "TV");
     }
 }
