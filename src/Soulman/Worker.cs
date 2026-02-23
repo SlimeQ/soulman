@@ -81,8 +81,12 @@ public class Worker : BackgroundService
         {
             SourcePath = prefs.SourcePath ?? baseSettings.SourcePath,
             DestinationPath = prefs.DestinationPath ?? baseSettings.DestinationPath,
+            MovieDestinationPath = baseSettings.MovieDestinationPath,
+            TvDestinationPath = baseSettings.TvDestinationPath,
             AdditionalSources = new List<string>(baseSettings.AdditionalSources ?? new List<string>()),
             AllowedExtensions = baseSettings.AllowedExtensions ?? Array.Empty<string>(),
+            VideoExtensions = baseSettings.VideoExtensions ?? Array.Empty<string>(),
+            SubtitleExtensions = baseSettings.SubtitleExtensions ?? Array.Empty<string>(),
             PollIntervalSeconds = baseSettings.PollIntervalSeconds,
             SettledSeconds = baseSettings.SettledSeconds
         };

@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using TagLib;
@@ -15,6 +16,26 @@ public class DownloadScanner
     private readonly MoveLogStore _moveLog;
     private readonly ConcurrentDictionary<string, FileObservation> _observed = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _protectedPathWarnings = new(StringComparer.OrdinalIgnoreCase);
+
+    // Matches SxxExx or NxNN patterns — indicates a TV episode
+    private static readonly Regex TvEpisodePattern = new(
+        @"(?:^|[\s._\-\[\(])(?:[Ss](?<season>\d{1,2})[Ee]\d{1,2}|(?<season2>\d{1,2})x\d{2})(?:[\s._\-\]\)]|$)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    // Extracts the show/movie title preceding a TV episode tag or year
+    private static readonly Regex TvTitlePattern = new(
+        @"^(?<title>.+?)[\s._\-]+(?:[Ss]\d{1,2}[Ee]\d{1,2}|\d{1,2}x\d{2})",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    // Extracts a 4-digit year typically present in movie filenames
+    private static readonly Regex YearPattern = new(
+        @"[\s._\(\[]((?:19|20)\d{2})[\s._\)\]\-]",
+        RegexOptions.Compiled);
+
+    // Extracts season number from TV pattern
+    private static readonly Regex SeasonPattern = new(
+        @"[Ss](?<season>\d{1,2})[Ee]|(?<season2>\d{1,2})x\d{2}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     public DownloadScanner(ILogger<DownloadScanner> logger, MoveLogStore moveLog)
     {
@@ -158,7 +179,7 @@ public class DownloadScanner
                 continue;
             }
 
-            if (await ProcessStableFileAsync(info, destination, cloneRoots, token))
+            if (await ProcessStableFileAsync(info, settings, destination, cloneRoots, token))
             {
                 movedCount++;
             }
@@ -191,18 +212,34 @@ public class DownloadScanner
         return set;
     }
 
-    private async Task<bool> ProcessStableFileAsync(FileInfo info, string destinationRoot,
-        IReadOnlyCollection<string> cloneDestinations, CancellationToken token)
+    private async Task<bool> ProcessStableFileAsync(FileInfo info, SoulmanSettings settings,
+        string musicDestinationRoot, IReadOnlyCollection<string> cloneDestinations, CancellationToken token)
     {
         if (token.IsCancellationRequested)
-        {
             return false;
-        }
 
         try
         {
-            var metadata = ReadTags(info);
-            var targetPath = BuildDestinationPath(destinationRoot, metadata, info);
+            string targetPath;
+
+            if (settings.IsVideoFile(info.FullName))
+            {
+                var (videoKind, videoTarget) = BuildVideoDestinationPath(info, settings);
+                targetPath = videoTarget;
+
+                // Move companion subtitle files from the same source directory
+                await MoveCompanionSubtitlesAsync(info, targetPath, settings, cloneDestinations, token);
+            }
+            else if (settings.IsSubtitleFile(info.FullName))
+            {
+                targetPath = BuildSubtitleDestinationPath(info, settings);
+            }
+            else
+            {
+                // Audio — existing music routing
+                var metadata = ReadTags(info);
+                targetPath = BuildDestinationPath(musicDestinationRoot, metadata, info);
+            }
 
             Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
 
@@ -210,7 +247,7 @@ public class DownloadScanner
             var originalPath = info.FullName;
             System.IO.File.Move(originalPath, finalPath);
             _logger.LogInformation("Moved {Source} -> {Destination}", originalPath, finalPath);
-            var clones = ReplicateClones(finalPath, destinationRoot, cloneDestinations);
+            var clones = ReplicateClones(finalPath, musicDestinationRoot, cloneDestinations);
             _moveLog.Add(new MoveEntry(DateTimeOffset.UtcNow, originalPath, finalPath, clones));
             return true;
         }
@@ -230,6 +267,140 @@ public class DownloadScanner
         await Task.CompletedTask;
         return false;
     }
+
+    private async Task MoveCompanionSubtitlesAsync(FileInfo videoFile, string videoTargetPath,
+        SoulmanSettings settings, IReadOnlyCollection<string> cloneDestinations, CancellationToken token)
+    {
+        var videoStem = Path.GetFileNameWithoutExtension(videoFile.Name);
+        var targetDir = Path.GetDirectoryName(videoTargetPath)!;
+
+        var companions = videoFile.Directory!
+            .EnumerateFiles()
+            .Where(f => settings.IsSubtitleFile(f.FullName)
+                && Path.GetFileNameWithoutExtension(f.Name)
+                    .StartsWith(videoStem, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        foreach (var sub in companions)
+        {
+            if (token.IsCancellationRequested) break;
+            try
+            {
+                var subTarget = EnsureUniquePath(Path.Combine(targetDir, sub.Name));
+                Directory.CreateDirectory(targetDir);
+                System.IO.File.Move(sub.FullName, subTarget);
+                _logger.LogInformation("Moved companion subtitle {Source} -> {Destination}", sub.FullName, subTarget);
+                _observed.TryRemove(sub.FullName, out _);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to move companion subtitle {File}", sub.FullName);
+            }
+        }
+
+        await Task.CompletedTask;
+    }
+
+    /// <summary>Detects TV show vs movie and returns (kind, destination path).</summary>
+    private (VideoKind Kind, string Path) BuildVideoDestinationPath(FileInfo info, SoulmanSettings settings)
+    {
+        var stem = Path.GetFileNameWithoutExtension(info.Name);
+
+        if (TvEpisodePattern.IsMatch(stem))
+        {
+            var root = !string.IsNullOrWhiteSpace(settings.TvDestinationPath)
+                ? settings.TvDestinationPath
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Videos", "TV");
+
+            var titleMatch = TvTitlePattern.Match(stem);
+            var showName = titleMatch.Success
+                ? NormalizeVideoTitle(titleMatch.Groups["title"].Value)
+                : NormalizeVideoTitle(stem);
+
+            var seasonMatch = SeasonPattern.Match(stem);
+            var seasonNum = seasonMatch.Success
+                ? int.Parse(seasonMatch.Groups["season"].Value.Length > 0
+                    ? seasonMatch.Groups["season"].Value
+                    : seasonMatch.Groups["season2"].Value)
+                : 1;
+
+            var seasonFolder = $"Season {seasonNum:00}";
+            return (VideoKind.Tv, Path.Combine(root, SanitizePathSegment(showName), seasonFolder, info.Name));
+        }
+        else
+        {
+            var root = !string.IsNullOrWhiteSpace(settings.MovieDestinationPath)
+                ? settings.MovieDestinationPath
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Videos", "Movies");
+
+            var yearMatch = YearPattern.Match(stem);
+            var year = yearMatch.Success ? yearMatch.Groups[1].Value : null;
+
+            // Strip year and junk from title
+            var title = NormalizeVideoTitle(stem);
+            var folderName = year != null
+                ? $"{SanitizePathSegment(title)} ({year})"
+                : SanitizePathSegment(title);
+
+            return (VideoKind.Movie, Path.Combine(root, folderName, info.Name));
+        }
+    }
+
+    private string BuildSubtitleDestinationPath(FileInfo info, SoulmanSettings settings)
+    {
+        // Apply the same TV/movie detection logic as for videos
+        var stem = Path.GetFileNameWithoutExtension(info.Name);
+
+        if (TvEpisodePattern.IsMatch(stem))
+        {
+            var root = !string.IsNullOrWhiteSpace(settings.TvDestinationPath)
+                ? settings.TvDestinationPath
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Videos", "TV");
+
+            var titleMatch = TvTitlePattern.Match(stem);
+            var showName = titleMatch.Success
+                ? NormalizeVideoTitle(titleMatch.Groups["title"].Value)
+                : NormalizeVideoTitle(stem);
+
+            var seasonMatch = SeasonPattern.Match(stem);
+            var seasonNum = seasonMatch.Success
+                ? int.Parse(seasonMatch.Groups["season"].Value.Length > 0
+                    ? seasonMatch.Groups["season"].Value
+                    : seasonMatch.Groups["season2"].Value)
+                : 1;
+
+            return Path.Combine(root, SanitizePathSegment(showName), $"Season {seasonNum:00}", info.Name);
+        }
+        else
+        {
+            var root = !string.IsNullOrWhiteSpace(settings.MovieDestinationPath)
+                ? settings.MovieDestinationPath
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Videos", "Movies");
+
+            var yearMatch = YearPattern.Match(stem);
+            var year = yearMatch.Success ? yearMatch.Groups[1].Value : null;
+            var title = NormalizeVideoTitle(stem);
+            var folderName = year != null
+                ? $"{SanitizePathSegment(title)} ({year})"
+                : SanitizePathSegment(title);
+
+            return Path.Combine(root, folderName, info.Name);
+        }
+    }
+
+    /// <summary>Cleans up a video filename stem into a human-readable title.</summary>
+    private static string NormalizeVideoTitle(string stem)
+    {
+        // Replace common separators with spaces
+        var spaced = Regex.Replace(stem, @"[\._]", " ");
+        // Strip trailing junk: year, resolution, codec tags, release group patterns
+        spaced = Regex.Replace(spaced, @"\s+(?:19|20)\d{2}.*$", string.Empty, RegexOptions.IgnoreCase);
+        spaced = Regex.Replace(spaced, @"\s+(?:720p|1080p|2160p|4k|bluray|bdrip|webrip|web-dl|dvdrip|hdtv|x264|x265|hevc|avc|h264|h265|remux|repack)\b.*$",
+            string.Empty, RegexOptions.IgnoreCase);
+        return spaced.Trim();
+    }
+
+    private enum VideoKind { Movie, Tv }
 
     private static TrackMetadata ReadTags(FileInfo info)
     {
