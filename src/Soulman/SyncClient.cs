@@ -74,7 +74,10 @@ public class SyncClient
 
         _logger.LogInformation("Peer {Machine} has {Count} files", peer.MachineName, remoteFiles.Count);
 
-        var destination = _options.CurrentValue.DestinationPath;
+        var settings = _options.CurrentValue;
+        var destination = !string.IsNullOrWhiteSpace(settings.SyncRootPath)
+            ? settings.SyncRootPath
+            : settings.DestinationPath;
         if (string.IsNullOrEmpty(destination)) return;
 
         int syncedCount = 0;
