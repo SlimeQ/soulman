@@ -430,10 +430,23 @@ internal class TrayApplicationContext : ApplicationContext
             return;
         }
 
+        var settings = _options.CurrentValue;
+        var displayDestination = destination;
+
+        // In split-root mode, a single move event may include files across music/movies/tv.
+        // Avoid misleading "to Music" notifications for movie/TV transfers.
+        if (string.IsNullOrWhiteSpace(settings.SyncRootPath)
+            && (!string.IsNullOrWhiteSpace(settings.MovieDestinationPath)
+                || !string.IsNullOrWhiteSpace(settings.TvDestinationPath))
+            && string.Equals(destination, settings.DestinationPath, StringComparison.OrdinalIgnoreCase))
+        {
+            displayDestination = "library destinations";
+        }
+
         _notifyIcon.ShowBalloonTip(
             4000,
             "Soulman",
-            $"Moved {count} file{(count == 1 ? string.Empty : "s")} to {destination}",
+            $"Moved {count} file{(count == 1 ? string.Empty : "s")} to {displayDestination}",
             ToolTipIcon.Info);
     }
 

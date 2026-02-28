@@ -175,11 +175,18 @@ public class SyncClient
 
             if (syncedCount > 0)
             {
-                var notifyTarget = settings.SyncRootPath
-                    ?? settings.DestinationPath
-                    ?? settings.MovieDestinationPath
-                    ?? settings.TvDestinationPath
-                    ?? "<unset>";
+                var hasSplitRoots = string.IsNullOrWhiteSpace(settings.SyncRootPath)
+                    && (!string.IsNullOrWhiteSpace(settings.MovieDestinationPath)
+                        || !string.IsNullOrWhiteSpace(settings.TvDestinationPath));
+
+                var notifyTarget = hasSplitRoots
+                    ? "library destinations"
+                    : settings.SyncRootPath
+                        ?? settings.DestinationPath
+                        ?? settings.MovieDestinationPath
+                        ?? settings.TvDestinationPath
+                        ?? "<unset>";
+
                 _moveBroker.Publish(syncedCount, notifyTarget);
             }
         }
