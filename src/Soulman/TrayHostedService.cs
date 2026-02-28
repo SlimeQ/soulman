@@ -435,8 +435,7 @@ internal class TrayApplicationContext : ApplicationContext
 
         // In split-root mode, a single move event may include files across music/movies/tv.
         // Avoid misleading "to Music" notifications for movie/TV transfers.
-        if (string.IsNullOrWhiteSpace(settings.SyncRootPath)
-            && (!string.IsNullOrWhiteSpace(settings.MovieDestinationPath)
+        if ((!string.IsNullOrWhiteSpace(settings.MovieDestinationPath)
                 || !string.IsNullOrWhiteSpace(settings.TvDestinationPath))
             && string.Equals(destination, settings.DestinationPath, StringComparison.OrdinalIgnoreCase))
         {
@@ -756,7 +755,6 @@ internal sealed class SoulmanSettingsForm : Form
     private readonly TextBox _destinationPath = new() { Dock = DockStyle.Fill };
     private readonly TextBox _moviePath = new() { Dock = DockStyle.Fill };
     private readonly TextBox _tvPath = new() { Dock = DockStyle.Fill };
-    private readonly string? _initialSyncRootPath;
     private readonly NumericUpDown _pollSeconds = new() { Minimum = 5, Maximum = 3600, Dock = DockStyle.Fill };
     private readonly NumericUpDown _settledSeconds = new() { Minimum = 5, Maximum = 3600, Dock = DockStyle.Fill };
     private readonly TextBox _additionalSources = new() { Multiline = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill };
@@ -772,7 +770,6 @@ internal sealed class SoulmanSettingsForm : Form
         _destinationPath.Text = settings.DestinationPath ?? string.Empty;
         _moviePath.Text = settings.MovieDestinationPath ?? string.Empty;
         _tvPath.Text = settings.TvDestinationPath ?? string.Empty;
-        _initialSyncRootPath = settings.SyncRootPath;
         _pollSeconds.Value = Math.Clamp(settings.PollIntervalSeconds, 5, 3600);
         _settledSeconds.Value = Math.Clamp(settings.SettledSeconds, 5, 3600);
         _additionalSources.Text = string.Join(Environment.NewLine, settings.AdditionalSources ?? new List<string>());
@@ -824,7 +821,6 @@ internal sealed class SoulmanSettingsForm : Form
             DestinationPath = NullIfEmpty(_destinationPath.Text),
             MovieDestinationPath = NullIfEmpty(_moviePath.Text),
             TvDestinationPath = NullIfEmpty(_tvPath.Text),
-            SyncRootPath = _initialSyncRootPath,
             PollIntervalSeconds = (int)_pollSeconds.Value,
             SettledSeconds = (int)_settledSeconds.Value,
             AdditionalSources = _additionalSources.Text
@@ -861,7 +857,6 @@ internal sealed class SoulmanTraySettings
     public string? DestinationPath { get; set; }
     public string? MovieDestinationPath { get; set; }
     public string? TvDestinationPath { get; set; }
-    public string? SyncRootPath { get; set; }
     public List<string> AdditionalSources { get; set; } = new();
     public int PollIntervalSeconds { get; set; } = 30;
     public int SettledSeconds { get; set; } = 20;
@@ -874,7 +869,6 @@ internal sealed class SoulmanTraySettings
             DestinationPath = prefs.DestinationPath ?? current.DestinationPath,
             MovieDestinationPath = current.MovieDestinationPath,
             TvDestinationPath = current.TvDestinationPath,
-            SyncRootPath = current.SyncRootPath,
             AdditionalSources = current.AdditionalSources?.ToList() ?? new List<string>(),
             PollIntervalSeconds = current.PollIntervalSeconds,
             SettledSeconds = current.SettledSeconds

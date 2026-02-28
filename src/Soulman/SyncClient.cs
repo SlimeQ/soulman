@@ -75,9 +75,7 @@ public class SyncClient
         _logger.LogInformation("Peer {Machine} has {Count} files", peer.MachineName, remoteFiles.Count);
 
         var settings = _options.CurrentValue;
-        var destination = !string.IsNullOrWhiteSpace(settings.SyncRootPath)
-            ? settings.SyncRootPath
-            : settings.DestinationPath;
+        var destination = settings.DestinationPath;
         if (string.IsNullOrEmpty(destination) && string.IsNullOrEmpty(settings.MovieDestinationPath) && string.IsNullOrEmpty(settings.TvDestinationPath)) return;
 
         int syncedCount = 0;
@@ -175,14 +173,12 @@ public class SyncClient
 
             if (syncedCount > 0)
             {
-                var hasSplitRoots = string.IsNullOrWhiteSpace(settings.SyncRootPath)
-                    && (!string.IsNullOrWhiteSpace(settings.MovieDestinationPath)
-                        || !string.IsNullOrWhiteSpace(settings.TvDestinationPath));
+                var hasSplitRoots = !string.IsNullOrWhiteSpace(settings.MovieDestinationPath)
+                    || !string.IsNullOrWhiteSpace(settings.TvDestinationPath);
 
                 var notifyTarget = hasSplitRoots
                     ? "library destinations"
-                    : settings.SyncRootPath
-                        ?? settings.DestinationPath
+                    : settings.DestinationPath
                         ?? settings.MovieDestinationPath
                         ?? settings.TvDestinationPath
                         ?? "<unset>";
@@ -265,12 +261,6 @@ public class SyncClient
     private static string ResolveLocalPath(SoulmanSettings settings, string? legacyDestination, string remotePath)
     {
         var normalized = remotePath.Replace('\\', '/').TrimStart('/');
-
-        // If SyncRootPath is configured, preserve legacy single-root behavior
-        if (!string.IsNullOrWhiteSpace(settings.SyncRootPath))
-        {
-            return Path.Combine(settings.SyncRootPath!, normalized);
-        }
 
         var slash = normalized.IndexOf('/');
         if (slash > 0)

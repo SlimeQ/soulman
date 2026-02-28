@@ -230,15 +230,6 @@ public class SyncServer : IHostedService, IDisposable
 
     private static IReadOnlyList<SyncRoot> GetSyncRoots(SoulmanSettings settings)
     {
-        // Legacy single-root mode still supported
-        if (!string.IsNullOrWhiteSpace(settings.SyncRootPath))
-        {
-            return new List<SyncRoot>
-            {
-                new(settings.SyncRootPath!, string.Empty)
-            };
-        }
-
         var roots = new List<SyncRoot>();
 
         if (!string.IsNullOrWhiteSpace(settings.DestinationPath))
