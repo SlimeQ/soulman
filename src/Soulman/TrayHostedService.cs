@@ -398,10 +398,12 @@ internal class TrayApplicationContext : ApplicationContext
             File.WriteAllText(configPath, payload);
 
             _notifyIcon.ShowBalloonTip(
-                5000,
+                3000,
                 "Soulman",
-                $"Settings saved to {configPath}. Restart Soulman to apply all changes.",
+                $"Settings saved to {configPath}. Restarting Soulman to apply changes...",
                 ToolTipIcon.Info);
+
+            RestartApplication();
         }
         catch (Exception ex)
         {
@@ -694,6 +696,27 @@ internal class TrayApplicationContext : ApplicationContext
         {
             Notify("Soulman", $"Update failed: {ex.Message}", ToolTipIcon.Warning);
         }
+    }
+
+    private void RestartApplication()
+    {
+        try
+        {
+            var exe = Application.ExecutablePath;
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = exe,
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(exe)
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to relaunch Soulman after settings save.");
+        }
+
+        ExitThread();
+        Environment.Exit(0);
     }
 
     private void PostToUi(Action action)
