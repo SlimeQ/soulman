@@ -212,6 +212,10 @@ internal class TrayApplicationContext : ApplicationContext
         setSource.Click += (_, _) => SetSourceFolder();
         _menu.Items.Add(setSource);
 
+        var openSettings = new ToolStripMenuItem("Settings...");
+        openSettings.Click += (_, _) => OpenSettingsPanel();
+        _menu.Items.Add(openSettings);
+
         var setDest = new ToolStripMenuItem($"Set Destination Folder...{DisplayPathSuffix(destPath)}");
         setDest.Click += (_, _) => SetDestinationFolder();
         _menu.Items.Add(setDest);
@@ -370,6 +374,53 @@ internal class TrayApplicationContext : ApplicationContext
             _pathStore.SetDestination(dialog.SelectedPath);
             BuildMenu();
         }
+    }
+
+    private void OpenSettingsPanel()
+    {
+        try
+        {
+            var configPath = GetConfigPath();
+            var current = SoulmanTraySettings.FromCurrent(_options.CurrentValue, _pathStore.Get());
+
+            using var form = new SoulmanSettingsForm(current);
+            if (form.ShowDialog() != DialogResult.OK)
+            {
+                return;
+            }
+
+            var updated = form.GetSettings();
+            Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);
+            var payload = JsonSerializer.Serialize(new { Soulman = updated }, new JsonSerializerOptions
+            {
+                WriteIndented = true
+            });
+            File.WriteAllText(configPath, payload);
+
+            _notifyIcon.ShowBalloonTip(
+                3000,
+                "Soulman",
+                $"Settings saved to {configPath}. Restarting Soulman to apply changes...",
+                ToolTipIcon.Info);
+
+            RestartApplication();
+        }
+        catch (Exception ex)
+        {
+            _notifyIcon.ShowBalloonTip(
+                4000,
+                "Soulman",
+                $"Failed to save settings: {ex.Message}",
+                ToolTipIcon.Warning);
+        }
+    }
+
+    private static string GetConfigPath()
+    {
+        var configDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "Soulman");
+        return Path.Combine(configDir, "appsettings.json");
     }
 
     public void OnMove(int count, string destination)
@@ -647,6 +698,27 @@ internal class TrayApplicationContext : ApplicationContext
         }
     }
 
+    private void RestartApplication()
+    {
+        try
+        {
+            var exe = Application.ExecutablePath;
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = exe,
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(exe)
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to relaunch Soulman after settings save.");
+        }
+
+        ExitThread();
+        Environment.Exit(0);
+    }
+
     private void PostToUi(Action action)
     {
         if (_uiContext != null)
@@ -662,5 +734,138 @@ internal class TrayApplicationContext : ApplicationContext
     private void Notify(string title, string message, ToolTipIcon icon)
     {
         PostToUi(() => _notifyIcon.ShowBalloonTip(3000, title, message, icon));
+    }
+}
+
+internal sealed class SoulmanSettingsForm : Form
+{
+    private readonly TextBox _sourcePath = new() { Dock = DockStyle.Fill };
+    private readonly TextBox _destinationPath = new() { Dock = DockStyle.Fill };
+    private readonly TextBox _moviePath = new() { Dock = DockStyle.Fill };
+    private readonly TextBox _tvPath = new() { Dock = DockStyle.Fill };
+    private readonly TextBox _syncRootPath = new() { Dock = DockStyle.Fill };
+    private readonly NumericUpDown _pollSeconds = new() { Minimum = 5, Maximum = 3600, Dock = DockStyle.Fill };
+    private readonly NumericUpDown _settledSeconds = new() { Minimum = 5, Maximum = 3600, Dock = DockStyle.Fill };
+    private readonly TextBox _additionalSources = new() { Multiline = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill };
+
+    public SoulmanSettingsForm(SoulmanTraySettings settings)
+    {
+        Text = "Soulman Settings";
+        Width = 760;
+        Height = 560;
+        StartPosition = FormStartPosition.CenterScreen;
+
+        _sourcePath.Text = settings.SourcePath ?? string.Empty;
+        _destinationPath.Text = settings.DestinationPath ?? string.Empty;
+        _moviePath.Text = settings.MovieDestinationPath ?? string.Empty;
+        _tvPath.Text = settings.TvDestinationPath ?? string.Empty;
+        _syncRootPath.Text = settings.SyncRootPath ?? string.Empty;
+        _pollSeconds.Value = Math.Clamp(settings.PollIntervalSeconds, 5, 3600);
+        _settledSeconds.Value = Math.Clamp(settings.SettledSeconds, 5, 3600);
+        _additionalSources.Text = string.Join(Environment.NewLine, settings.AdditionalSources ?? new List<string>());
+
+        var table = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 9,
+            Padding = new Padding(10),
+            AutoSize = true
+        };
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+
+        AddRow(table, 0, "SourcePath", _sourcePath);
+        AddRow(table, 1, "DestinationPath (Music)", _destinationPath);
+        AddRow(table, 2, "MovieDestinationPath", _moviePath);
+        AddRow(table, 3, "TvDestinationPath", _tvPath);
+        AddRow(table, 4, "SyncRootPath", _syncRootPath);
+        AddRow(table, 5, "PollIntervalSeconds", _pollSeconds);
+        AddRow(table, 6, "SettledSeconds", _settledSeconds);
+        AddRow(table, 7, "AdditionalSources (one per line)", _additionalSources, 140);
+
+        var buttonPanel = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Bottom,
+            FlowDirection = FlowDirection.RightToLeft,
+            Padding = new Padding(10),
+            Height = 52
+        };
+
+        var save = new Button { Text = "Save", DialogResult = DialogResult.OK, Width = 90 };
+        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Width = 90 };
+        buttonPanel.Controls.Add(save);
+        buttonPanel.Controls.Add(cancel);
+
+        Controls.Add(table);
+        Controls.Add(buttonPanel);
+
+        AcceptButton = save;
+        CancelButton = cancel;
+    }
+
+    public SoulmanTraySettings GetSettings()
+    {
+        return new SoulmanTraySettings
+        {
+            SourcePath = NullIfEmpty(_sourcePath.Text),
+            DestinationPath = NullIfEmpty(_destinationPath.Text),
+            MovieDestinationPath = NullIfEmpty(_moviePath.Text),
+            TvDestinationPath = NullIfEmpty(_tvPath.Text),
+            SyncRootPath = NullIfEmpty(_syncRootPath.Text),
+            PollIntervalSeconds = (int)_pollSeconds.Value,
+            SettledSeconds = (int)_settledSeconds.Value,
+            AdditionalSources = _additionalSources.Text
+                .Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(s => s.Trim())
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList()
+        };
+    }
+
+    private static void AddRow(TableLayoutPanel table, int rowIndex, string label, Control control, int minHeight = 30)
+    {
+        table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        var lbl = new Label
+        {
+            Text = label,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Dock = DockStyle.Fill,
+            Padding = new Padding(0, 8, 0, 0)
+        };
+        table.Controls.Add(lbl, 0, rowIndex);
+        control.MinimumSize = new Size(120, minHeight);
+        table.Controls.Add(control, 1, rowIndex);
+    }
+
+    private static string? NullIfEmpty(string value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+}
+
+internal sealed class SoulmanTraySettings
+{
+    public string? SourcePath { get; set; }
+    public string? DestinationPath { get; set; }
+    public string? MovieDestinationPath { get; set; }
+    public string? TvDestinationPath { get; set; }
+    public string? SyncRootPath { get; set; }
+    public List<string> AdditionalSources { get; set; } = new();
+    public int PollIntervalSeconds { get; set; } = 30;
+    public int SettledSeconds { get; set; } = 20;
+
+    public static SoulmanTraySettings FromCurrent(SoulmanSettings current, PathPreferences prefs)
+    {
+        return new SoulmanTraySettings
+        {
+            SourcePath = prefs.SourcePath ?? current.SourcePath,
+            DestinationPath = prefs.DestinationPath ?? current.DestinationPath,
+            MovieDestinationPath = current.MovieDestinationPath,
+            TvDestinationPath = current.TvDestinationPath,
+            SyncRootPath = current.SyncRootPath,
+            AdditionalSources = current.AdditionalSources?.ToList() ?? new List<string>(),
+            PollIntervalSeconds = current.PollIntervalSeconds,
+            SettledSeconds = current.SettledSeconds
+        };
     }
 }
