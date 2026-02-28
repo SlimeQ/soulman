@@ -743,7 +743,7 @@ internal sealed class SoulmanSettingsForm : Form
     private readonly TextBox _destinationPath = new() { Dock = DockStyle.Fill };
     private readonly TextBox _moviePath = new() { Dock = DockStyle.Fill };
     private readonly TextBox _tvPath = new() { Dock = DockStyle.Fill };
-    private readonly TextBox _syncRootPath = new() { Dock = DockStyle.Fill };
+    private readonly string? _initialSyncRootPath;
     private readonly NumericUpDown _pollSeconds = new() { Minimum = 5, Maximum = 3600, Dock = DockStyle.Fill };
     private readonly NumericUpDown _settledSeconds = new() { Minimum = 5, Maximum = 3600, Dock = DockStyle.Fill };
     private readonly TextBox _additionalSources = new() { Multiline = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill };
@@ -759,7 +759,7 @@ internal sealed class SoulmanSettingsForm : Form
         _destinationPath.Text = settings.DestinationPath ?? string.Empty;
         _moviePath.Text = settings.MovieDestinationPath ?? string.Empty;
         _tvPath.Text = settings.TvDestinationPath ?? string.Empty;
-        _syncRootPath.Text = settings.SyncRootPath ?? string.Empty;
+        _initialSyncRootPath = settings.SyncRootPath;
         _pollSeconds.Value = Math.Clamp(settings.PollIntervalSeconds, 5, 3600);
         _settledSeconds.Value = Math.Clamp(settings.SettledSeconds, 5, 3600);
         _additionalSources.Text = string.Join(Environment.NewLine, settings.AdditionalSources ?? new List<string>());
@@ -779,10 +779,9 @@ internal sealed class SoulmanSettingsForm : Form
         AddRow(table, 1, "DestinationPath (Music)", _destinationPath);
         AddRow(table, 2, "MovieDestinationPath", _moviePath);
         AddRow(table, 3, "TvDestinationPath", _tvPath);
-        AddRow(table, 4, "SyncRootPath", _syncRootPath);
-        AddRow(table, 5, "PollIntervalSeconds", _pollSeconds);
-        AddRow(table, 6, "SettledSeconds", _settledSeconds);
-        AddRow(table, 7, "AdditionalSources (one per line)", _additionalSources, 140);
+        AddRow(table, 4, "PollIntervalSeconds", _pollSeconds);
+        AddRow(table, 5, "SettledSeconds", _settledSeconds);
+        AddRow(table, 6, "AdditionalSources (one per line)", _additionalSources, 140);
 
         var buttonPanel = new FlowLayoutPanel
         {
@@ -812,7 +811,7 @@ internal sealed class SoulmanSettingsForm : Form
             DestinationPath = NullIfEmpty(_destinationPath.Text),
             MovieDestinationPath = NullIfEmpty(_moviePath.Text),
             TvDestinationPath = NullIfEmpty(_tvPath.Text),
-            SyncRootPath = NullIfEmpty(_syncRootPath.Text),
+            SyncRootPath = _initialSyncRootPath,
             PollIntervalSeconds = (int)_pollSeconds.Value,
             SettledSeconds = (int)_settledSeconds.Value,
             AdditionalSources = _additionalSources.Text
