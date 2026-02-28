@@ -135,14 +135,14 @@ public class SyncServer : IHostedService, IDisposable
 
     private async Task HandleList(StreamWriter writer)
     {
-        var root = _options.CurrentValue.DestinationPath;
+        var settings = _options.CurrentValue;
+        var root = GetSyncRoot(settings);
         if (string.IsNullOrEmpty(root) || !Directory.Exists(root))
         {
             await writer.WriteLineAsync("[]");
             return;
         }
 
-        var settings = _options.CurrentValue;
         var files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
             .Where(f => settings.IsSupportedFile(f))
             .Select(f => new
@@ -166,7 +166,8 @@ public class SyncServer : IHostedService, IDisposable
             return;
         }
 
-        var root = _options.CurrentValue.DestinationPath;
+        var settings = _options.CurrentValue;
+        var root = GetSyncRoot(settings);
         if (string.IsNullOrEmpty(root))
         {
              await writer.WriteLineAsync("ERROR No library configured");
@@ -207,5 +208,15 @@ public class SyncServer : IHostedService, IDisposable
             _logger.LogWarning(ex, "Error serving {Path} to {Remote}", relativePath, remoteLabel);
             throw;
         }
+    }
+
+    private static string? GetSyncRoot(SoulmanSettings settings)
+    {
+        if (!string.IsNullOrWhiteSpace(settings.SyncRootPath))
+        {
+            return settings.SyncRootPath;
+        }
+
+        return settings.DestinationPath;
     }
 }
