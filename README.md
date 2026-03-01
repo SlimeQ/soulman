@@ -37,6 +37,7 @@ Defaults (override via config, CLI, or env):
 - `PollIntervalSeconds`: 30
 - `SettledSeconds`: 20
 - Extensions: `.mp3, .flac, .wav, .aac, .m4a, .ogg, .aiff, .alac, .opus, .wv, .ape`
+- `PurgedPaths`: `[]` (optional sync blackhole list such as `Music/Music` or `Music/Movies`)
 
 ## Install script
 - `.\install.ps1` runs the ClickOnce publish, bundles a one-file `soulman_installer.exe` (same as the GitHub release payload), and launches it. Run with no arguments:
@@ -58,6 +59,7 @@ Defaults (override via config, CLI, or env):
 - Builds target paths from tags; `(Disc #)` is only added for multi-disc albums (disc number > 1 or disc count > 1).
 - Moves the organized file into the destination, clones it to any configured clone roots, and logs the result for the last 24 hours.
 - Emits warnings when a protected path is encountered so you can adjust sources before anything is moved.
+- `PurgedPaths` entries are treated as hard deny-list prefixes in peer sync: files under those paths are not served, not downloaded, and are deleted locally on sync. For safety, root-only entries (`Music`, `Movies`, `TV`) are ignored.
 
 ### Tray, clones, and logs
 - Tray icon (uses `soulman.ico`) gives:

@@ -144,6 +144,7 @@ public class SyncServer : IHostedService, IDisposable
             return;
         }
 
+        var purgedPaths = PurgePathPolicy.GetSafeConfiguredPaths(settings, _logger);
         var files = new List<object>();
         foreach (var root in roots)
         {
@@ -159,6 +160,11 @@ public class SyncServer : IHostedService, IDisposable
                 var publishPath = string.IsNullOrWhiteSpace(root.Prefix)
                     ? rel
                     : $"{root.Prefix}/{rel}";
+
+                if (PurgePathPolicy.IsPurgedPath(publishPath, purgedPaths))
+                {
+                    continue;
+                }
 
                 files.Add(new
                 {
@@ -186,6 +192,13 @@ public class SyncServer : IHostedService, IDisposable
         {
              await writer.WriteLineAsync("ERROR No library configured");
              return;
+        }
+
+        var purgedPaths = PurgePathPolicy.GetSafeConfiguredPaths(settings, _logger);
+        if (PurgePathPolicy.IsPurgedPath(relativePath, purgedPaths))
+        {
+            await writer.WriteLineAsync("ERROR Path purged");
+            return;
         }
 
         var (root, strippedRelativePath) = ResolveRootForRequestedPath(roots, relativePath);

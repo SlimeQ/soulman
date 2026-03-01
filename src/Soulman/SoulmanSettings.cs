@@ -20,6 +20,10 @@ public class SoulmanSettings
 
     public int SettledSeconds { get; set; } = 20;
 
+    // Paths to purge/blackhole across peer sync, e.g. "Music/Music" or "Music/Movies".
+    // Safety: root-only paths like "Music" are ignored.
+    public string[] PurgedPaths { get; set; } = Array.Empty<string>();
+
     public string[] AllowedExtensions { get; set; } =
     {
         ".mp3", ".flac", ".wav", ".aac", ".m4a", ".ogg", ".aiff", ".alac", ".opus", ".wv", ".ape"
