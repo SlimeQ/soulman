@@ -14,16 +14,15 @@ public class SoulmanSettings
 
     public string? TvDestinationPath { get; set; } = GetDefaultTvPath();
 
-    // Optional root used for peer sync LIST/GET operations. If unset, falls back to
-    // DestinationPath (legacy behavior). For multi-library setups, point this at a
-    // common root (e.g. /srv/media-library) so Music/Movies/TV all sync.
-    public string? SyncRootPath { get; set; }
-
     public List<string> AdditionalSources { get; set; } = new();
 
     public int PollIntervalSeconds { get; set; } = 30;
 
     public int SettledSeconds { get; set; } = 20;
+
+    // Paths to purge/blackhole across peer sync, e.g. "Music/Music" or "Music/Movies".
+    // Safety: root-only paths like "Music" are ignored.
+    public string[] PurgedPaths { get; set; } = Array.Empty<string>();
 
     public string[] AllowedExtensions { get; set; } =
     {

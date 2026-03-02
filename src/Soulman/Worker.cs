@@ -83,7 +83,6 @@ public class Worker : BackgroundService
             DestinationPath = prefs.DestinationPath ?? baseSettings.DestinationPath,
             MovieDestinationPath = baseSettings.MovieDestinationPath,
             TvDestinationPath = baseSettings.TvDestinationPath,
-            SyncRootPath = baseSettings.SyncRootPath,
             AdditionalSources = new List<string>(baseSettings.AdditionalSources ?? new List<string>()),
             AllowedExtensions = baseSettings.AllowedExtensions ?? Array.Empty<string>(),
             VideoExtensions = baseSettings.VideoExtensions ?? Array.Empty<string>(),
