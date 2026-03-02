@@ -5,7 +5,9 @@ param(
     [string]$ReleaseName,
     [string]$NotesPath,
     [switch]$Draft,
-    [int]$ApplicationRevision = 0
+    [int]$ApplicationRevision = 0,
+    [switch]$SkipWindows,
+    [switch]$SkipLinux
 )
 
 $ErrorActionPreference = 'Stop'
@@ -205,6 +207,78 @@ internal static class Program
     return $OutputExe
 }
 
+function Build-LinuxRelease {
+    param(
+        [string]$Configuration,
+        [string]$VersionTag,
+        [string]$OutputTarGz
+    )
+
+    $linuxPublishDir = Join-Path $root "src/Soulman/bin/$Configuration/net8.0/linux-x64/publish"
+    
+    # Clean previous Linux publish
+    if (Test-Path $linuxPublishDir) {
+        Remove-Item -Recurse -Force $linuxPublishDir -ErrorAction SilentlyContinue
+    }
+
+    Write-Host "[release] Publishing Linux self-contained binary..." -ForegroundColor Cyan
+    
+    # Build Linux self-contained single-file
+    dotnet publish "src/Soulman/Soulman.csproj" `
+        -c $Configuration `
+        -f net8.0 `
+        -r linux-x64 `
+        --self-contained true `
+        /p:PublishSingleFile=true `
+        /p:PublishTrimmed=false `
+        /p:ReleaseTag=$VersionTag `
+        -o $linuxPublishDir
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Linux publish failed with exit code $LASTEXITCODE"
+    }
+
+    # Create tar.gz archive
+    Write-Host "[release] Creating Linux tar.gz archive..." -ForegroundColor Cyan
+    
+    $tempDir = Join-Path ([IO.Path]::GetTempPath()) ("soulman_linux_" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
+    
+    $soulmanDir = Join-Path $tempDir "soulman"
+    New-Item -ItemType Directory -Force -Path $soulmanDir | Out-Null
+    
+    # Copy files to temp directory
+    Copy-Item -Path (Join-Path $linuxPublishDir '*') -Destination $soulmanDir -Recurse -Force
+    
+    # Create tar.gz
+    $tarGzPath = $OutputTarGz
+    Push-Location $tempDir
+    try {
+        # Use tar command (available in PowerShell via WSL or Git Bash on Windows)
+        $tarExe = Get-Command 'tar' -ErrorAction SilentlyContinue
+        if ($tarExe) {
+            & tar -czf $tarGzPath 'soulman'
+        } else {
+            # Fall back to .NET compression
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            [System.IO.Compression.ZipFile]::CreateFromDirectory($soulmanDir, [string]::Replace($tarGzPath, '.tar.gz', '.zip'))
+            Write-Warning "tar not found; created .zip instead of .tar.gz"
+            $tarGzPath = [string]::Replace($tarGzPath, '.tar.gz', '.zip')
+        }
+    } finally {
+        Pop-Location
+    }
+    
+    # Cleanup
+    try { Remove-Item -Recurse -Force $tempDir } catch {}
+    
+    if (-not (Test-Path $tarGzPath)) {
+        throw "Failed to create Linux release archive"
+    }
+    
+    return $tarGzPath
+}
+
 function Invoke-Step {
     param (
         [string]$Message,
@@ -253,7 +327,7 @@ if ($ApplicationRevision -lt 0) {
 
 $applicationVersion = if ($normalizedTag -match '^\d+\.\d+\.\d+$') { "$normalizedTag.0" } else { $normalizedTag }
 if (-not $ReleaseName) {
-    $ReleaseName = "Soulman Windows $tagInput"
+    $ReleaseName = "Soulman $tagInput"
 }
 
 if ($NotesPath) {
@@ -263,52 +337,79 @@ if ($NotesPath) {
 Invoke-Step 'Checking GitHub authentication' { gh auth status --hostname github.com | Out-Null }
 Invoke-Step 'Building project' { dotnet build -c $Configuration }
 
-Invoke-Step 'Publishing ClickOnce installer via MSBuild' {
-    .\Publish-Installer.ps1 `
-        -Configuration $Configuration `
-        -PublishProfile $PublishProfile `
-        -ApplicationVersion $applicationVersion `
-        -ApplicationRevision $ApplicationRevision `
-        -ReleaseTag $tagInput
-}
-
-$publishDir = Join-Path $root "src\Soulman\bin\$Configuration\net8.0-windows\publish"
-if (-not (Test-Path $publishDir)) {
-    throw "Publish directory not found at $publishDir"
-}
-
-$setupExe = Join-Path $publishDir 'setup.exe'
-$appManifest = Join-Path $publishDir 'Soulman.application'
-
-if (-not (Test-Path $setupExe)) { throw "Required asset missing: $setupExe" }
-if (-not (Test-Path $appManifest)) { throw "Required asset missing: $appManifest" }
-
-$installHelper = Join-Path $root 'Install-ClickOnce.ps1'
-if (Test-Path $installHelper) {
-    Copy-Item -Path $installHelper -Destination (Join-Path $publishDir 'Install-ClickOnce.ps1') -Force
-}
-
 $artifactsDir = Join-Path $root 'artifacts/github-release'
 if (-not (Test-Path $artifactsDir)) {
     New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 }
 
-$installerExe = Join-Path $artifactsDir 'soulman_installer.exe'
-if (Test-Path $installerExe) { Remove-Item $installerExe -Force }
+$assets = @()
 
-Invoke-Step "Bundling single-file installer to $installerExe" {
-    Build-SingleInstaller -PublishDir $publishDir -VersionTag $tagInput -OutputExe $installerExe | Out-Null
+# Build Windows release (if not skipped)
+if (-not $SkipWindows) {
+    Invoke-Step 'Publishing ClickOnce installer via MSBuild' {
+        .\Publish-Installer.ps1 `
+            -Configuration $Configuration `
+            -PublishProfile $PublishProfile `
+            -ApplicationVersion $applicationVersion `
+            -ApplicationRevision $ApplicationRevision `
+            -ReleaseTag $tagInput
+    }
+
+    $publishDir = Join-Path $root "src\Soulman\bin\$Configuration\net8.0-windows\publish"
+    if (-not (Test-Path $publishDir)) {
+        throw "Publish directory not found at $publishDir"
+    }
+
+    $setupExe = Join-Path $publishDir 'setup.exe'
+    $appManifest = Join-Path $publishDir 'Soulman.application'
+
+    if (-not (Test-Path $setupExe)) { throw "Required asset missing: $setupExe" }
+    if (-not (Test-Path $appManifest)) { throw "Required asset missing: $appManifest" }
+
+    $installHelper = Join-Path $root 'Install-ClickOnce.ps1'
+    if (Test-Path $installHelper) {
+        Copy-Item -Path $installHelper -Destination (Join-Path $publishDir 'Install-ClickOnce.ps1') -Force
+    }
+
+    $installerExe = Join-Path $artifactsDir 'soulman_installer.exe'
+    if (Test-Path $installerExe) { Remove-Item $installerExe -Force }
+
+    Invoke-Step "Bundling single-file installer to $installerExe" {
+        Build-SingleInstaller -PublishDir $publishDir -VersionTag $tagInput -OutputExe $installerExe | Out-Null
+    }
+
+    $assets += $installerExe
 }
 
-$assets = @($installerExe)
+# Build Linux release (if not skipped)
+if (-not $SkipLinux) {
+    $linuxTarGz = Join-Path $artifactsDir 'soulman-linux.tar.gz'
+    if (Test-Path $linuxTarGz) { Remove-Item $linuxTarGz -Force }
+    
+    Invoke-Step "Building Linux release" {
+        $linuxTarGz = Build-LinuxRelease -Configuration $Configuration -VersionTag $tagInput -OutputTarGz $linuxTarGz
+    }
+    
+    $assets += $linuxTarGz
+}
+
+$releaseNotes = if ($NotesPath) {
+    Get-Content $NotesPath -Raw
+} else {
+    $notes = @()
+    if (-not $SkipWindows) { $notes += "- Windows ClickOnce installer (.exe)" }
+    if (-not $SkipLinux) { $notes += "- Linux self-contained binary (.tar.gz)`n`nInstall: Extract and run `./Soulman` or use the included `install-linux.sh` script." }
+    $notes -join "`n"
+}
 
 Invoke-Step "Creating GitHub release $tagInput" {
     $ghArgs = @('release', 'create', $tagInput) + $assets + @('--title', $ReleaseName)
     if ($Draft) { $ghArgs += '--draft' }
-    if ($NotesPath) {
-        $ghArgs += @('--notes-file', $NotesPath)
-    } else {
-        $ghArgs += @('--notes', "Windows ClickOnce release for $tagInput")
-    }
+    $ghArgs += @('--notes', $releaseNotes)
     gh @ghArgs
 }
+
+Write-Host ""
+Write-Host "✓ Release $tagInput published successfully!" -ForegroundColor Green
+if (-not $SkipWindows) { Write-Host "  - soulman_installer.exe (Windows)" }
+if (-not $SkipLinux) { Write-Host "  - soulman-linux.tar.gz (Linux)" }
