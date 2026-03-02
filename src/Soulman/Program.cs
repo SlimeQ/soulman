@@ -9,10 +9,12 @@ using Soulman;
 // ── CLI subcommand check ────────────────────────────────────────────────
 // `soulman blacklist <full_path>`  — add to blacklist (sync filter, no deletion)
 // `soulman purge    <full_path>`   — add to blacklist + delete locally + broadcast to peers
+// `soulman install-overlay`         — show instructions to register shell icon overlay
+// `soulman uninstall-overlay`       — show instructions to unregister shell icon overlay
 // `soulman help`                   — usage
 // Works on both Windows and Linux.
 var subCommand = args.Length > 0 ? args[0].ToLowerInvariant() : null;
-if (subCommand is "blacklist" or "purge" or "help")
+if (subCommand is "blacklist" or "purge" or "install-overlay" or "uninstall-overlay" or "help")
 {
     var exitCode = await HandleCliAsync(args);
     Environment.Exit(exitCode);
@@ -134,13 +136,31 @@ static async Task<int> HandleCliAsync(string[] args)
     var command   = args[0].ToLowerInvariant();
     var inputPath = args.Length > 1 ? string.Join(" ", args.Skip(1)) : null;
 
+    // Overlay commands don't require settings
+    if (command == "install-overlay")
+    {
+        var (success, message) = ShellOverlayHelper.InstallOverlay(inputPath);
+        CliOutput(message, isError: !success);
+        return success ? 0 : 1;
+    }
+    
+    if (command == "uninstall-overlay")
+    {
+        var (success, message) = ShellOverlayHelper.UninstallOverlay();
+        CliOutput(message, isError: !success);
+        return success ? 0 : 1;
+    }
+
     if (command == "help" || (command is "blacklist" or "purge" && string.IsNullOrWhiteSpace(inputPath)))
     {
         CliOutput("Soulman — Blacklist & Purge CLI", isError: false);
         CliOutput("", isError: false);
         CliOutput("Usage:", isError: false);
-        CliOutput("  soulman blacklist <full_path>   Add path to sync blacklist (no deletion)", isError: false);
-        CliOutput("  soulman purge    <full_path>   Blacklist + delete locally + broadcast to peers", isError: false);
+        CliOutput("  soulman blacklist <full_path>      Add path to sync blacklist (no deletion)", isError: false);
+        CliOutput("  soulman purge    <full_path>      Blacklist + delete locally + broadcast to peers", isError: false);
+        CliOutput("", isError: false);
+        CliOutput("  soulman install-overlay [dll]    Show instructions for shell icon overlay", isError: false);
+        CliOutput("  soulman uninstall-overlay        Show instructions to remove icon overlay", isError: false);
         CliOutput("", isError: false);
         CliOutput("Examples:", isError: false);
         CliOutput("  soulman blacklist \"/srv/media-library/Music/Movies\"", isError: false);
@@ -190,6 +210,11 @@ static async Task<int> HandleCliAsync(string[] args)
     {
         var msg = CliAddToBlacklist(configPath, syncPath);
         CliOutput(msg, isError: false);
+        
+        // Notify Windows Explorer to refresh overlays
+        if (OperatingSystem.IsWindows())
+            ShellOverlayHelper.NotifyRefreshAll();
+        
         return 0;
     }
 
@@ -241,6 +266,11 @@ static async Task<int> HandleCliAsync(string[] args)
     }
 
     CliOutput($"Purge complete: '{syncPath}'", isError: false);
+    
+    // Notify Windows Explorer to refresh overlays
+    if (OperatingSystem.IsWindows())
+        ShellOverlayHelper.NotifyRefreshAll();
+    
     return 0;
 }
 

@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    
+    <!-- COM hosting for shell extension - requires Windows build host -->
+    <EnableComHosting>true</EnableComHosting>
+    <ComHostName>SoulmanIconOverlay</ComHostName>
+  </PropertyGroup>
+
+  <!-- Copy overlay icon to output - use soulman.ico as overlay source -->
+  <ItemGroup>
+    <None Include="..\Soulman\soulman.ico" Link="soulman.ico" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
