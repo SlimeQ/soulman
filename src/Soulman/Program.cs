@@ -50,6 +50,7 @@ builder.Services.AddSingleton<PathPreferenceStore>();
 builder.Services.AddSingleton<MoveNotificationBroker>();
 builder.Services.AddSingleton<MoveLogStore>();
 builder.Services.AddSingleton<TransferProgressBroker>();
+builder.Services.AddSingleton<PurgeService>();
 builder.Services.AddSingleton<SyncServer>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<SyncServer>());
 builder.Services.AddSingleton<SyncClient>();

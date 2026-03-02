@@ -6,11 +6,13 @@ public sealed class PurgeWorker : BackgroundService
 {
     private readonly ILogger<PurgeWorker> _logger;
     private readonly IOptionsMonitor<SoulmanSettings> _options;
+    private readonly PurgeService _purgeService;
 
-    public PurgeWorker(ILogger<PurgeWorker> logger, IOptionsMonitor<SoulmanSettings> options)
+    public PurgeWorker(ILogger<PurgeWorker> logger, IOptionsMonitor<SoulmanSettings> options, PurgeService purgeService)
     {
         _logger = logger;
         _options = options;
+        _purgeService = purgeService;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -32,60 +34,6 @@ public sealed class PurgeWorker : BackgroundService
 
     private void ApplyPurges(SoulmanSettings settings)
     {
-        var purgedPaths = PurgePathPolicy.GetSafeConfiguredPaths(settings, _logger);
-        if (purgedPaths.Count == 0)
-            return;
-
-        foreach (var purged in purgedPaths)
-        {
-            var localPath = ResolveLocalPath(settings, purged);
-
-            try
-            {
-                if (Directory.Exists(localPath))
-                {
-                    Directory.Delete(localPath, recursive: true);
-                    _logger.LogInformation("Purged directory {Path}", localPath);
-                    continue;
-                }
-
-                if (File.Exists(localPath))
-                {
-                    File.Delete(localPath);
-                    _logger.LogInformation("Purged file {Path}", localPath);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to purge configured path {Path}", localPath);
-            }
-        }
-    }
-
-    private static string ResolveLocalPath(SoulmanSettings settings, string remotePath)
-    {
-        var normalized = remotePath.Replace('\\', '/').TrimStart('/');
-        var slash = normalized.IndexOf('/');
-        if (slash > 0)
-        {
-            var prefix = normalized[..slash];
-            var rest = normalized[(slash + 1)..];
-
-            if (string.Equals(prefix, "Music", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(settings.DestinationPath))
-                return Path.Combine(settings.DestinationPath!, rest);
-
-            if (string.Equals(prefix, "Movies", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(settings.MovieDestinationPath))
-                return Path.Combine(settings.MovieDestinationPath!, rest);
-
-            if (string.Equals(prefix, "TV", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(settings.TvDestinationPath))
-                return Path.Combine(settings.TvDestinationPath!, rest);
-        }
-
-        var basePath = settings.DestinationPath
-                       ?? settings.MovieDestinationPath
-                       ?? settings.TvDestinationPath
-                       ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-
-        return Path.Combine(basePath, normalized);
+        _purgeService.ApplyPurges(settings);
     }
 }

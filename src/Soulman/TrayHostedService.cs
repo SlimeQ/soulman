@@ -21,6 +21,7 @@ public class TrayHostedService : IHostedService, IDisposable
     private readonly MoveLogStore _moveLog;
     private readonly InstanceDiscovery _discovery;
     private readonly TransferProgressBroker _progressBroker;
+    private readonly PurgeService _purgeService;
     private Thread? _uiThread;
     private TrayApplicationContext? _context;
     private readonly ManualResetEventSlim _started = new(false);
@@ -33,7 +34,8 @@ public class TrayHostedService : IHostedService, IDisposable
         MoveNotificationBroker moveBroker,
         MoveLogStore moveLog,
         InstanceDiscovery discovery,
-        TransferProgressBroker progressBroker)
+        TransferProgressBroker progressBroker,
+        PurgeService purgeService)
     {
         _logger = logger;
         _options = options;
@@ -43,6 +45,7 @@ public class TrayHostedService : IHostedService, IDisposable
         _moveLog = moveLog;
         _discovery = discovery;
         _progressBroker = progressBroker;
+        _purgeService = purgeService;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -74,7 +77,7 @@ public class TrayHostedService : IHostedService, IDisposable
             }
 
             _context = new TrayApplicationContext(_logger, _options, _cloneStore, _pathStore, _moveBroker, _moveLog,
-                _discovery, _progressBroker, icon);
+                _discovery, _progressBroker, _purgeService, icon);
             _started.Set();
             Application.Run(_context);
         }
@@ -121,6 +124,7 @@ internal class TrayApplicationContext : ApplicationContext
     private readonly MoveLogStore _moveLog;
     private readonly InstanceDiscovery _discovery;
     private readonly TransferProgressBroker _progressBroker;
+    private readonly PurgeService _purgeService;
     private readonly NotifyIcon _notifyIcon;
     private readonly ContextMenuStrip _menu;
     private readonly string _startupShortcutPath;
@@ -132,7 +136,7 @@ internal class TrayApplicationContext : ApplicationContext
     public TrayApplicationContext(ILogger<TrayHostedService> logger, IOptionsMonitor<SoulmanSettings> options,
         CloneFolderStore cloneStore,
         PathPreferenceStore pathStore, MoveNotificationBroker moveBroker, MoveLogStore moveLog,
-        InstanceDiscovery discovery, TransferProgressBroker progressBroker, Icon? icon)
+        InstanceDiscovery discovery, TransferProgressBroker progressBroker, PurgeService purgeService, Icon? icon)
     {
         _logger = logger;
         _options = options;
@@ -142,6 +146,7 @@ internal class TrayApplicationContext : ApplicationContext
         _moveLog = moveLog;
         _discovery = discovery;
         _progressBroker = progressBroker;
+        _purgeService = purgeService;
         _menu = new ContextMenuStrip();
         _uiContext = SynchronizationContext.Current;
         _startupShortcutPath = Path.Combine(
@@ -215,6 +220,10 @@ internal class TrayApplicationContext : ApplicationContext
         var openSettings = new ToolStripMenuItem("Settings...");
         openSettings.Click += (_, _) => OpenSettingsPanel();
         _menu.Items.Add(openSettings);
+
+        var purgeNow = new ToolStripMenuItem("Apply PurgedPaths Now");
+        purgeNow.Click += (_, _) => ApplyPurgesNow();
+        _menu.Items.Add(purgeNow);
 
         var setDest = new ToolStripMenuItem($"Set Destination Folder...{DisplayPathSuffix(destPath)}");
         setDest.Click += (_, _) => SetDestinationFolder();
@@ -373,6 +382,23 @@ internal class TrayApplicationContext : ApplicationContext
         {
             _pathStore.SetDestination(dialog.SelectedPath);
             BuildMenu();
+        }
+    }
+
+    private void ApplyPurgesNow()
+    {
+        try
+        {
+            var count = _purgeService.ApplyPurges(_options.CurrentValue);
+            var msg = count > 0
+                ? $"Purged {count} configured path{(count == 1 ? string.Empty : "s")}."
+                : "No matching configured purged paths found locally.";
+
+            _notifyIcon.ShowBalloonTip(3000, "Soulman", msg, ToolTipIcon.Info);
+        }
+        catch (Exception ex)
+        {
+            _notifyIcon.ShowBalloonTip(4000, "Soulman", $"Failed to apply purges: {ex.Message}", ToolTipIcon.Warning);
         }
     }
 
