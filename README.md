@@ -39,6 +39,45 @@ Defaults (override via config, CLI, or env):
 - Extensions: `.mp3, .flac, .wav, .aac, .m4a, .ogg, .aiff, .alac, .opus, .wv, .ape`
 - `PurgedPaths`: `[]` (optional sync blackhole list such as `Music/Music` or `Music/Movies`)
 
+### Blacklist Management
+
+Soulman supports a "blacklist" of paths that are excluded from peer sync and auto-purged locally. This is useful for preventing re-sync of unwanted folders like `Music/Music` or `Music/Movies`.
+
+**Valid paths:** Must be scoped like `Music/something`, `Movies/something`, or `TV/something`. Root-only paths (`Music`, `Movies`, `TV`) are rejected for safety.
+
+#### Linux CLI
+
+```bash
+# Add a path to the blacklist
+./Soulman --add-blacklist Music/Movies
+./Soulman -a "Music/Music"
+
+# List all blacklisted paths
+./Soulman --list-blacklist
+./Soulman -l
+
+# Remove a path from the blacklist
+./Soulman --remove-blacklist Music/Movies
+./Soulman -r Music/Music
+
+# Clear all blacklisted paths
+./Soulman --clear-blacklist
+./Soulman -c
+
+# Show help
+./Soulman --help
+```
+
+#### Windows UI
+
+From the tray icon menu, select **Manage Blacklist...** to open a dialog where you can:
+- View all currently blacklisted paths
+- Add new paths (validated before adding)
+- Remove selected paths
+- Clear all paths at once
+
+The blacklist is stored in the `PurgedPaths` setting in your `appsettings.json`.
+
 ## Install script
 - `.\install.ps1` runs the ClickOnce publish, bundles a one-file `soulman_installer.exe` (same as the GitHub release payload), and launches it. Run with no arguments:
   ```powershell
