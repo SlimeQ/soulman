@@ -2,11 +2,31 @@ using System.Threading;
 using Soulman;
 
 const string mutexName = "Global\\Soulman.Instance";
-using var singleInstance = new Mutex(initiallyOwned: true, name: mutexName, out var isNewInstance);
+Mutex? singleInstance = null;
+var isNewInstance = false;
+
+try
+{
+    singleInstance = new Mutex(initiallyOwned: true, name: mutexName, out isNewInstance);
+}
+catch (UnauthorizedAccessException)
+{
+    isNewInstance = false;
+}
 
 if (!isNewInstance)
 {
-    Console.WriteLine("Soulman is already running; exiting duplicate instance.");
+#if WINDOWS
+    if (OperatingSystem.IsWindows() && Environment.UserInteractive)
+    {
+        System.Windows.Forms.MessageBox.Show(
+            "Soulman is already running.",
+            "Soulman",
+            System.Windows.Forms.MessageBoxButtons.OK,
+            System.Windows.Forms.MessageBoxIcon.Information);
+    }
+#endif
+
     return;
 }
 
@@ -76,6 +96,8 @@ finally
 {
     if (isNewInstance)
     {
-        singleInstance.ReleaseMutex();
+        singleInstance?.ReleaseMutex();
     }
+
+    singleInstance?.Dispose();
 }

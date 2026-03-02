@@ -14,6 +14,7 @@ namespace Soulman;
 public class TrayHostedService : IHostedService, IDisposable
 {
     private readonly ILogger<TrayHostedService> _logger;
+    private readonly IHostApplicationLifetime _appLifetime;
     private readonly IOptionsMonitor<SoulmanSettings> _options;
     private readonly CloneFolderStore _cloneStore;
     private readonly PathPreferenceStore _pathStore;
@@ -28,6 +29,7 @@ public class TrayHostedService : IHostedService, IDisposable
 
     public TrayHostedService(
         ILogger<TrayHostedService> logger,
+        IHostApplicationLifetime appLifetime,
         IOptionsMonitor<SoulmanSettings> options,
         CloneFolderStore cloneStore,
         PathPreferenceStore pathStore,
@@ -38,6 +40,7 @@ public class TrayHostedService : IHostedService, IDisposable
         PurgeService purgeService)
     {
         _logger = logger;
+        _appLifetime = appLifetime;
         _options = options;
         _cloneStore = cloneStore;
         _pathStore = pathStore;
@@ -76,6 +79,8 @@ public class TrayHostedService : IHostedService, IDisposable
                 icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             }
 
+            icon ??= SystemIcons.Application;
+
             _context = new TrayApplicationContext(_logger, _options, _cloneStore, _pathStore, _moveBroker, _moveLog,
                 _discovery, _progressBroker, _purgeService, icon);
             _started.Set();
@@ -84,10 +89,38 @@ public class TrayHostedService : IHostedService, IDisposable
         catch (Exception ex)
         {
             _logger.LogError(ex, "Tray thread crashed");
+            TryShowTrayCrashDialog(ex);
+            _appLifetime.StopApplication();
         }
         finally
         {
             _started.Set();
+        }
+    }
+
+    private static void TryShowTrayCrashDialog(Exception ex)
+    {
+        try
+        {
+            if (!OperatingSystem.IsWindows() || !Environment.UserInteractive)
+            {
+                return;
+            }
+
+            var logDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Soulman",
+                "logs");
+
+            MessageBox.Show(
+                $"Soulman tray failed to start: {ex.Message}{Environment.NewLine}{Environment.NewLine}Check logs in:{Environment.NewLine}{logDir}",
+                "Soulman",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
+        catch
+        {
+            // best effort only
         }
     }
 

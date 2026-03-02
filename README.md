@@ -13,7 +13,7 @@ Background .NET service that watches a Soulseek downloads folder (e.g. `Document
 - Move log UI shows recent moves (last 24h) including clone copies.
 - Responds to LAN discovery so the tray can show other running Soulman hosts (UDP broadcast on port 45832; needs inbound allow on Private/Domain networks).
 - Discovers other Soulman peers on your LAN and pulls missing library files over TCP (default 45833); skips files that already exist locally.
-- Enforces a single running instance; duplicate launches exit immediately.
+- Enforces a single running instance; duplicate launches show an "already running" message on Windows.
 
 ## Quickstart
 ```powershell
@@ -83,6 +83,12 @@ Defaults (override via config, CLI, or env):
    sc.exe start Soulman
    ```
    Stop/delete with `sc stop Soulman` then `sc delete Soulman`. The app respects `appsettings.*` and `SOULMAN__` env vars at service start.
+
+## Startup troubleshooting
+- If Soulman seems to do nothing after launch, it may already be running. New builds show an "already running" dialog for duplicate launches on Windows.
+- Check Task Manager for `Soulman.exe` and end stale processes before relaunching.
+- App logs are written to `%LOCALAPPDATA%\Soulman\logs\` (`soulman-YYYY-MM-DD.log`).
+- If tray initialization crashes, Soulman now shows an error dialog and points to the log folder so startup errors are visible.
 
 ## Packaging & installer (lifeviz-style)
 - `.\Publish-Installer.ps1` — resolves `MSBuild.exe` and runs the ClickOnce publish profile (`src/Soulman/Properties/PublishProfiles/WinClickOnce.pubxml`) against `net8.0-windows` (required because the app is multi-targeted). Outputs to `src/Soulman/bin/<Configuration>/net8.0-windows/publish/`.
