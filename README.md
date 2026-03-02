@@ -37,7 +37,46 @@ Defaults (override via config, CLI, or env):
 - `PollIntervalSeconds`: 30
 - `SettledSeconds`: 20
 - Extensions: `.mp3, .flac, .wav, .aac, .m4a, .ogg, .aiff, .alac, .opus, .wv, .ape`
-- `PurgedPaths`: `[]` (optional sync blackhole list such as `Music/Music` or `Music/Movies`)
+- `PurgedPaths`: `[]` (optional sync blacklist such as `Music/Music` or `Music/Movies` - files under these paths are excluded from peer sync but NOT deleted locally)
+
+### Blacklist Management
+
+Soulman supports a "blacklist" of paths that are excluded from peer sync. This is useful for preventing unwanted folders like `Music/Music` or `Music/Movies` from being downloaded.
+
+**Valid paths:** Must be scoped like `Music/something`, `Movies/something`, or `TV/something`. Root-only paths (`Music`, `Movies`, `TV`) are rejected for safety.
+
+#### Linux CLI
+
+```bash
+# Add a path to the blacklist
+./Soulman --add-blacklist Music/Movies
+./Soulman -a "Music/Music"
+
+# List all blacklisted paths
+./Soulman --list-blacklist
+./Soulman -l
+
+# Remove a path from the blacklist
+./Soulman --remove-blacklist Music/Movies
+./Soulman -r Music/Music
+
+# Clear all blacklisted paths
+./Soulman --clear-blacklist
+./Soulman -c
+
+# Show help
+./Soulman --help
+```
+
+#### Windows UI
+
+From the tray icon menu, select **Manage Blacklist...** to open a dialog where you can:
+- View all currently blacklisted paths
+- Add new paths (validated before adding)
+- Remove selected paths
+- Clear all paths at once
+
+The blacklist is stored in the `PurgedPaths` setting in your `appsettings.json`.
 
 ## Install script
 - `.\install.ps1` runs the ClickOnce publish, bundles a one-file `soulman_installer.exe` (same as the GitHub release payload), and launches it. Run with no arguments:
@@ -59,7 +98,7 @@ Defaults (override via config, CLI, or env):
 - Builds target paths from tags; `(Disc #)` is only added for multi-disc albums (disc number > 1 or disc count > 1).
 - Moves the organized file into the destination, clones it to any configured clone roots, and logs the result for the last 24 hours.
 - Emits warnings when a protected path is encountered so you can adjust sources before anything is moved.
-- `PurgedPaths` entries are treated as hard deny-list prefixes in peer sync: files under those paths are not served, not downloaded, and are deleted locally. A background purge worker also reapplies deletion every 10 minutes to prevent reappearance. For safety, root-only entries (`Music`, `Movies`, `TV`) are ignored.
+- `PurgedPaths` entries are treated as deny-list prefixes in peer sync: files under those paths are not served (to peers) and not downloaded (from peers). Local files are never deleted. For safety, root-only entries (`Music`, `Movies`, `TV`) are ignored.
 
 ### Tray, clones, and logs
 - Tray icon (uses `soulman.ico`) gives:
