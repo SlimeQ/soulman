@@ -75,9 +75,24 @@ public class SyncClient
         _logger.LogInformation("Peer {Machine} has {Count} files", peer.MachineName, remoteFiles.Count);
 
         var settings = _options.CurrentValue;
-        var destination = !string.IsNullOrWhiteSpace(settings.SyncRootPath)
-            ? settings.SyncRootPath
-            : settings.DestinationPath;
+        var purgedPaths = PurgePathPolicy.GetSafeConfiguredPaths(settings, _logger);
+
+        if (purgedPaths.Count > 0)
+        {
+            var before = remoteFiles.Count;
+            remoteFiles = remoteFiles
+                .Where(f => !PurgePathPolicy.IsPurgedPath(f.Path, purgedPaths))
+                .ToList();
+
+            var removed = before - remoteFiles.Count;
+            if (removed > 0)
+            {
+                _logger.LogInformation("Filtered {Count} remote files due to PurgedPaths policy", removed);
+            }
+
+            ApplyLocalPurges(settings, purgedPaths);
+        }
+        var destination = settings.DestinationPath;
         if (string.IsNullOrEmpty(destination) && string.IsNullOrEmpty(settings.MovieDestinationPath) && string.IsNullOrEmpty(settings.TvDestinationPath)) return;
 
         int syncedCount = 0;
@@ -175,11 +190,16 @@ public class SyncClient
 
             if (syncedCount > 0)
             {
-                var notifyTarget = settings.SyncRootPath
-                    ?? settings.DestinationPath
-                    ?? settings.MovieDestinationPath
-                    ?? settings.TvDestinationPath
-                    ?? "<unset>";
+                var hasSplitRoots = !string.IsNullOrWhiteSpace(settings.MovieDestinationPath)
+                    || !string.IsNullOrWhiteSpace(settings.TvDestinationPath);
+
+                var notifyTarget = hasSplitRoots
+                    ? "library destinations"
+                    : settings.DestinationPath
+                        ?? settings.MovieDestinationPath
+                        ?? settings.TvDestinationPath
+                        ?? "<unset>";
+
                 _moveBroker.Publish(syncedCount, notifyTarget);
             }
         }
@@ -255,15 +275,37 @@ public class SyncClient
         }
     }
 
+    private void ApplyLocalPurges(SoulmanSettings settings, IReadOnlyList<string> purgedPaths)
+    {
+        foreach (var purged in purgedPaths)
+        {
+            var localPath = ResolveLocalPath(settings, settings.DestinationPath, purged);
+
+            try
+            {
+                if (Directory.Exists(localPath))
+                {
+                    Directory.Delete(localPath, recursive: true);
+                    _logger.LogInformation("Purged directory {Path}", localPath);
+                    continue;
+                }
+
+                if (File.Exists(localPath))
+                {
+                    File.Delete(localPath);
+                    _logger.LogInformation("Purged file {Path}", localPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to apply local purge for {Path}", localPath);
+            }
+        }
+    }
+
     private static string ResolveLocalPath(SoulmanSettings settings, string? legacyDestination, string remotePath)
     {
         var normalized = remotePath.Replace('\\', '/').TrimStart('/');
-
-        // If SyncRootPath is configured, preserve legacy single-root behavior
-        if (!string.IsNullOrWhiteSpace(settings.SyncRootPath))
-        {
-            return Path.Combine(settings.SyncRootPath!, normalized);
-        }
 
         var slash = normalized.IndexOf('/');
         if (slash > 0)

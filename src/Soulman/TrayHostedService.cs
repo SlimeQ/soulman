@@ -21,6 +21,7 @@ public class TrayHostedService : IHostedService, IDisposable
     private readonly MoveLogStore _moveLog;
     private readonly InstanceDiscovery _discovery;
     private readonly TransferProgressBroker _progressBroker;
+    private readonly PurgeService _purgeService;
     private Thread? _uiThread;
     private TrayApplicationContext? _context;
     private readonly ManualResetEventSlim _started = new(false);
@@ -33,7 +34,8 @@ public class TrayHostedService : IHostedService, IDisposable
         MoveNotificationBroker moveBroker,
         MoveLogStore moveLog,
         InstanceDiscovery discovery,
-        TransferProgressBroker progressBroker)
+        TransferProgressBroker progressBroker,
+        PurgeService purgeService)
     {
         _logger = logger;
         _options = options;
@@ -43,6 +45,7 @@ public class TrayHostedService : IHostedService, IDisposable
         _moveLog = moveLog;
         _discovery = discovery;
         _progressBroker = progressBroker;
+        _purgeService = purgeService;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -74,7 +77,7 @@ public class TrayHostedService : IHostedService, IDisposable
             }
 
             _context = new TrayApplicationContext(_logger, _options, _cloneStore, _pathStore, _moveBroker, _moveLog,
-                _discovery, _progressBroker, icon);
+                _discovery, _progressBroker, _purgeService, icon);
             _started.Set();
             Application.Run(_context);
         }
@@ -121,6 +124,7 @@ internal class TrayApplicationContext : ApplicationContext
     private readonly MoveLogStore _moveLog;
     private readonly InstanceDiscovery _discovery;
     private readonly TransferProgressBroker _progressBroker;
+    private readonly PurgeService _purgeService;
     private readonly NotifyIcon _notifyIcon;
     private readonly ContextMenuStrip _menu;
     private readonly string _startupShortcutPath;
@@ -132,7 +136,7 @@ internal class TrayApplicationContext : ApplicationContext
     public TrayApplicationContext(ILogger<TrayHostedService> logger, IOptionsMonitor<SoulmanSettings> options,
         CloneFolderStore cloneStore,
         PathPreferenceStore pathStore, MoveNotificationBroker moveBroker, MoveLogStore moveLog,
-        InstanceDiscovery discovery, TransferProgressBroker progressBroker, Icon? icon)
+        InstanceDiscovery discovery, TransferProgressBroker progressBroker, PurgeService purgeService, Icon? icon)
     {
         _logger = logger;
         _options = options;
@@ -142,6 +146,7 @@ internal class TrayApplicationContext : ApplicationContext
         _moveLog = moveLog;
         _discovery = discovery;
         _progressBroker = progressBroker;
+        _purgeService = purgeService;
         _menu = new ContextMenuStrip();
         _uiContext = SynchronizationContext.Current;
         _startupShortcutPath = Path.Combine(
@@ -215,6 +220,10 @@ internal class TrayApplicationContext : ApplicationContext
         var openSettings = new ToolStripMenuItem("Settings...");
         openSettings.Click += (_, _) => OpenSettingsPanel();
         _menu.Items.Add(openSettings);
+
+        var purgeNow = new ToolStripMenuItem("Apply PurgedPaths Now");
+        purgeNow.Click += (_, _) => ApplyPurgesNow();
+        _menu.Items.Add(purgeNow);
 
         var setDest = new ToolStripMenuItem($"Set Destination Folder...{DisplayPathSuffix(destPath)}");
         setDest.Click += (_, _) => SetDestinationFolder();
@@ -376,6 +385,23 @@ internal class TrayApplicationContext : ApplicationContext
         }
     }
 
+    private void ApplyPurgesNow()
+    {
+        try
+        {
+            var count = _purgeService.ApplyPurges(_options.CurrentValue);
+            var msg = count > 0
+                ? $"Purged {count} configured path{(count == 1 ? string.Empty : "s")}."
+                : "No matching configured purged paths found locally.";
+
+            _notifyIcon.ShowBalloonTip(3000, "Soulman", msg, ToolTipIcon.Info);
+        }
+        catch (Exception ex)
+        {
+            _notifyIcon.ShowBalloonTip(4000, "Soulman", $"Failed to apply purges: {ex.Message}", ToolTipIcon.Warning);
+        }
+    }
+
     private void OpenSettingsPanel()
     {
         try
@@ -430,10 +456,22 @@ internal class TrayApplicationContext : ApplicationContext
             return;
         }
 
+        var settings = _options.CurrentValue;
+        var displayDestination = destination;
+
+        // In split-root mode, a single move event may include files across music/movies/tv.
+        // Avoid misleading "to Music" notifications for movie/TV transfers.
+        if ((!string.IsNullOrWhiteSpace(settings.MovieDestinationPath)
+                || !string.IsNullOrWhiteSpace(settings.TvDestinationPath))
+            && string.Equals(destination, settings.DestinationPath, StringComparison.OrdinalIgnoreCase))
+        {
+            displayDestination = "library destinations";
+        }
+
         _notifyIcon.ShowBalloonTip(
             4000,
             "Soulman",
-            $"Moved {count} file{(count == 1 ? string.Empty : "s")} to {destination}",
+            $"Moved {count} file{(count == 1 ? string.Empty : "s")} to {displayDestination}",
             ToolTipIcon.Info);
     }
 
@@ -743,10 +781,10 @@ internal sealed class SoulmanSettingsForm : Form
     private readonly TextBox _destinationPath = new() { Dock = DockStyle.Fill };
     private readonly TextBox _moviePath = new() { Dock = DockStyle.Fill };
     private readonly TextBox _tvPath = new() { Dock = DockStyle.Fill };
-    private readonly TextBox _syncRootPath = new() { Dock = DockStyle.Fill };
     private readonly NumericUpDown _pollSeconds = new() { Minimum = 5, Maximum = 3600, Dock = DockStyle.Fill };
     private readonly NumericUpDown _settledSeconds = new() { Minimum = 5, Maximum = 3600, Dock = DockStyle.Fill };
     private readonly TextBox _additionalSources = new() { Multiline = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill };
+    private readonly TextBox _purgedPaths = new() { Multiline = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill };
 
     public SoulmanSettingsForm(SoulmanTraySettings settings)
     {
@@ -759,16 +797,16 @@ internal sealed class SoulmanSettingsForm : Form
         _destinationPath.Text = settings.DestinationPath ?? string.Empty;
         _moviePath.Text = settings.MovieDestinationPath ?? string.Empty;
         _tvPath.Text = settings.TvDestinationPath ?? string.Empty;
-        _syncRootPath.Text = settings.SyncRootPath ?? string.Empty;
         _pollSeconds.Value = Math.Clamp(settings.PollIntervalSeconds, 5, 3600);
         _settledSeconds.Value = Math.Clamp(settings.SettledSeconds, 5, 3600);
         _additionalSources.Text = string.Join(Environment.NewLine, settings.AdditionalSources ?? new List<string>());
+        _purgedPaths.Text = string.Join(Environment.NewLine, settings.PurgedPaths ?? new List<string>());
 
         var table = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 2,
-            RowCount = 9,
+            RowCount = 10,
             Padding = new Padding(10),
             AutoSize = true
         };
@@ -779,10 +817,10 @@ internal sealed class SoulmanSettingsForm : Form
         AddRow(table, 1, "DestinationPath (Music)", _destinationPath);
         AddRow(table, 2, "MovieDestinationPath", _moviePath);
         AddRow(table, 3, "TvDestinationPath", _tvPath);
-        AddRow(table, 4, "SyncRootPath", _syncRootPath);
-        AddRow(table, 5, "PollIntervalSeconds", _pollSeconds);
-        AddRow(table, 6, "SettledSeconds", _settledSeconds);
-        AddRow(table, 7, "AdditionalSources (one per line)", _additionalSources, 140);
+        AddRow(table, 4, "PollIntervalSeconds", _pollSeconds);
+        AddRow(table, 5, "SettledSeconds", _settledSeconds);
+        AddRow(table, 6, "AdditionalSources (one per line)", _additionalSources, 120);
+        AddRow(table, 7, "PurgedPaths (one per line, e.g. Music/Music)", _purgedPaths, 120);
 
         var buttonPanel = new FlowLayoutPanel
         {
@@ -812,10 +850,15 @@ internal sealed class SoulmanSettingsForm : Form
             DestinationPath = NullIfEmpty(_destinationPath.Text),
             MovieDestinationPath = NullIfEmpty(_moviePath.Text),
             TvDestinationPath = NullIfEmpty(_tvPath.Text),
-            SyncRootPath = NullIfEmpty(_syncRootPath.Text),
             PollIntervalSeconds = (int)_pollSeconds.Value,
             SettledSeconds = (int)_settledSeconds.Value,
             AdditionalSources = _additionalSources.Text
+                .Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(s => s.Trim())
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            PurgedPaths = _purgedPaths.Text
                 .Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries)
                 .Select(s => s.Trim())
                 .Where(s => !string.IsNullOrWhiteSpace(s))
@@ -849,8 +892,8 @@ internal sealed class SoulmanTraySettings
     public string? DestinationPath { get; set; }
     public string? MovieDestinationPath { get; set; }
     public string? TvDestinationPath { get; set; }
-    public string? SyncRootPath { get; set; }
     public List<string> AdditionalSources { get; set; } = new();
+    public List<string> PurgedPaths { get; set; } = new();
     public int PollIntervalSeconds { get; set; } = 30;
     public int SettledSeconds { get; set; } = 20;
 
@@ -862,8 +905,8 @@ internal sealed class SoulmanTraySettings
             DestinationPath = prefs.DestinationPath ?? current.DestinationPath,
             MovieDestinationPath = current.MovieDestinationPath,
             TvDestinationPath = current.TvDestinationPath,
-            SyncRootPath = current.SyncRootPath,
             AdditionalSources = current.AdditionalSources?.ToList() ?? new List<string>(),
+            PurgedPaths = current.PurgedPaths?.ToList() ?? new List<string>(),
             PollIntervalSeconds = current.PollIntervalSeconds,
             SettledSeconds = current.SettledSeconds
         };
