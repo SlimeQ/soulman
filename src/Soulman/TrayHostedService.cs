@@ -22,6 +22,7 @@ public class TrayHostedService : IHostedService, IDisposable
     private readonly InstanceDiscovery _discovery;
     private readonly TransferProgressBroker _progressBroker;
     private readonly PurgeService _purgeService;
+    private readonly BlacklistManager _blacklistManager;
     private Thread? _uiThread;
     private TrayApplicationContext? _context;
     private readonly ManualResetEventSlim _started = new(false);
@@ -35,7 +36,8 @@ public class TrayHostedService : IHostedService, IDisposable
         MoveLogStore moveLog,
         InstanceDiscovery discovery,
         TransferProgressBroker progressBroker,
-        PurgeService purgeService)
+        PurgeService purgeService,
+        BlacklistManager blacklistManager)
     {
         _logger = logger;
         _options = options;
@@ -46,6 +48,7 @@ public class TrayHostedService : IHostedService, IDisposable
         _discovery = discovery;
         _progressBroker = progressBroker;
         _purgeService = purgeService;
+        _blacklistManager = blacklistManager;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -77,7 +80,7 @@ public class TrayHostedService : IHostedService, IDisposable
             }
 
             _context = new TrayApplicationContext(_logger, _options, _cloneStore, _pathStore, _moveBroker, _moveLog,
-                _discovery, _progressBroker, _purgeService, icon);
+                _discovery, _progressBroker, _purgeService, _blacklistManager, icon);
             _started.Set();
             Application.Run(_context);
         }
@@ -125,6 +128,7 @@ internal class TrayApplicationContext : ApplicationContext
     private readonly InstanceDiscovery _discovery;
     private readonly TransferProgressBroker _progressBroker;
     private readonly PurgeService _purgeService;
+    private readonly BlacklistManager _blacklistManager;
     private readonly NotifyIcon _notifyIcon;
     private readonly ContextMenuStrip _menu;
     private readonly string _startupShortcutPath;
@@ -136,7 +140,8 @@ internal class TrayApplicationContext : ApplicationContext
     public TrayApplicationContext(ILogger<TrayHostedService> logger, IOptionsMonitor<SoulmanSettings> options,
         CloneFolderStore cloneStore,
         PathPreferenceStore pathStore, MoveNotificationBroker moveBroker, MoveLogStore moveLog,
-        InstanceDiscovery discovery, TransferProgressBroker progressBroker, PurgeService purgeService, Icon? icon)
+        InstanceDiscovery discovery, TransferProgressBroker progressBroker, PurgeService purgeService,
+        BlacklistManager blacklistManager, Icon? icon)
     {
         _logger = logger;
         _options = options;
@@ -147,6 +152,7 @@ internal class TrayApplicationContext : ApplicationContext
         _discovery = discovery;
         _progressBroker = progressBroker;
         _purgeService = purgeService;
+        _blacklistManager = blacklistManager;
         _menu = new ContextMenuStrip();
         _uiContext = SynchronizationContext.Current;
         _startupShortcutPath = Path.Combine(
@@ -220,6 +226,10 @@ internal class TrayApplicationContext : ApplicationContext
         var openSettings = new ToolStripMenuItem("Settings...");
         openSettings.Click += (_, _) => OpenSettingsPanel();
         _menu.Items.Add(openSettings);
+
+        var manageBlacklist = new ToolStripMenuItem("Manage Blacklist...");
+        manageBlacklist.Click += (_, _) => OpenBlacklistForm();
+        _menu.Items.Add(manageBlacklist);
 
         var purgeNow = new ToolStripMenuItem("Apply PurgedPaths Now");
         purgeNow.Click += (_, _) => ApplyPurgesNow();
@@ -437,6 +447,23 @@ internal class TrayApplicationContext : ApplicationContext
                 4000,
                 "Soulman",
                 $"Failed to save settings: {ex.Message}",
+                ToolTipIcon.Warning);
+        }
+    }
+
+    private void OpenBlacklistForm()
+    {
+        try
+        {
+            using var form = new BlacklistForm(_blacklistManager);
+            form.ShowDialog();
+        }
+        catch (Exception ex)
+        {
+            _notifyIcon.ShowBalloonTip(
+                3000,
+                "Soulman",
+                $"Could not open blacklist manager: {ex.Message}",
                 ToolTipIcon.Warning);
         }
     }

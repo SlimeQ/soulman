@@ -4,6 +4,22 @@ namespace Soulman;
 
 internal static class PurgePathPolicy
 {
+    /// <summary>
+    /// Validates a purge path and returns whether it's safe along with a reason if not.
+    /// </summary>
+    public static (bool IsValid, string? Reason) Validate(string normalizedPath)
+    {
+        if (string.IsNullOrWhiteSpace(normalizedPath))
+            return (false, "Path cannot be empty.");
+
+        if (!IsSafeScopedPath(normalizedPath))
+        {
+            return (false, "Purge paths must be scoped like Music/something, Movies/something, or TV/something.");
+        }
+
+        return (true, null);
+    }
+
     public static IReadOnlyList<string> GetSafeConfiguredPaths(SoulmanSettings settings, ILogger logger)
     {
         var configured = settings.PurgedPaths ?? Array.Empty<string>();
