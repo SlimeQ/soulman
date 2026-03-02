@@ -758,6 +758,7 @@ internal sealed class SoulmanSettingsForm : Form
     private readonly NumericUpDown _pollSeconds = new() { Minimum = 5, Maximum = 3600, Dock = DockStyle.Fill };
     private readonly NumericUpDown _settledSeconds = new() { Minimum = 5, Maximum = 3600, Dock = DockStyle.Fill };
     private readonly TextBox _additionalSources = new() { Multiline = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill };
+    private readonly TextBox _purgedPaths = new() { Multiline = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill };
 
     public SoulmanSettingsForm(SoulmanTraySettings settings)
     {
@@ -773,12 +774,13 @@ internal sealed class SoulmanSettingsForm : Form
         _pollSeconds.Value = Math.Clamp(settings.PollIntervalSeconds, 5, 3600);
         _settledSeconds.Value = Math.Clamp(settings.SettledSeconds, 5, 3600);
         _additionalSources.Text = string.Join(Environment.NewLine, settings.AdditionalSources ?? new List<string>());
+        _purgedPaths.Text = string.Join(Environment.NewLine, settings.PurgedPaths ?? new List<string>());
 
         var table = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 2,
-            RowCount = 9,
+            RowCount = 10,
             Padding = new Padding(10),
             AutoSize = true
         };
@@ -791,7 +793,8 @@ internal sealed class SoulmanSettingsForm : Form
         AddRow(table, 3, "TvDestinationPath", _tvPath);
         AddRow(table, 4, "PollIntervalSeconds", _pollSeconds);
         AddRow(table, 5, "SettledSeconds", _settledSeconds);
-        AddRow(table, 6, "AdditionalSources (one per line)", _additionalSources, 140);
+        AddRow(table, 6, "AdditionalSources (one per line)", _additionalSources, 120);
+        AddRow(table, 7, "PurgedPaths (one per line, e.g. Music/Music)", _purgedPaths, 120);
 
         var buttonPanel = new FlowLayoutPanel
         {
@@ -828,6 +831,12 @@ internal sealed class SoulmanSettingsForm : Form
                 .Select(s => s.Trim())
                 .Where(s => !string.IsNullOrWhiteSpace(s))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            PurgedPaths = _purgedPaths.Text
+                .Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(s => s.Trim())
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList()
         };
     }
@@ -858,6 +867,7 @@ internal sealed class SoulmanTraySettings
     public string? MovieDestinationPath { get; set; }
     public string? TvDestinationPath { get; set; }
     public List<string> AdditionalSources { get; set; } = new();
+    public List<string> PurgedPaths { get; set; } = new();
     public int PollIntervalSeconds { get; set; } = 30;
     public int SettledSeconds { get; set; } = 20;
 
@@ -870,6 +880,7 @@ internal sealed class SoulmanTraySettings
             MovieDestinationPath = current.MovieDestinationPath,
             TvDestinationPath = current.TvDestinationPath,
             AdditionalSources = current.AdditionalSources?.ToList() ?? new List<string>(),
+            PurgedPaths = current.PurgedPaths?.ToList() ?? new List<string>(),
             PollIntervalSeconds = current.PollIntervalSeconds,
             SettledSeconds = current.SettledSeconds
         };

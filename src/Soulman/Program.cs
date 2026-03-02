@@ -54,6 +54,7 @@ builder.Services.AddSingleton<SyncServer>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<SyncServer>());
 builder.Services.AddSingleton<SyncClient>();
 builder.Services.AddHostedService<SyncWorker>();
+builder.Services.AddHostedService<PurgeWorker>();
 builder.Services.AddSingleton<InstanceDiscovery>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<InstanceDiscovery>());
 builder.Services.AddHostedService<Worker>();

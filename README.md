@@ -59,7 +59,7 @@ Defaults (override via config, CLI, or env):
 - Builds target paths from tags; `(Disc #)` is only added for multi-disc albums (disc number > 1 or disc count > 1).
 - Moves the organized file into the destination, clones it to any configured clone roots, and logs the result for the last 24 hours.
 - Emits warnings when a protected path is encountered so you can adjust sources before anything is moved.
-- `PurgedPaths` entries are treated as hard deny-list prefixes in peer sync: files under those paths are not served, not downloaded, and are deleted locally on sync. For safety, root-only entries (`Music`, `Movies`, `TV`) are ignored.
+- `PurgedPaths` entries are treated as hard deny-list prefixes in peer sync: files under those paths are not served, not downloaded, and are deleted locally. A background purge worker also reapplies deletion every 10 minutes to prevent reappearance. For safety, root-only entries (`Music`, `Movies`, `TV`) are ignored.
 
 ### Tray, clones, and logs
 - Tray icon (uses `soulman.ico`) gives:
