@@ -398,7 +398,7 @@ $releaseNotes = if ($NotesPath) {
 } else {
     $notes = @()
     if (-not $SkipWindows) { $notes += "- Windows ClickOnce installer (.exe)" }
-    if (-not $SkipLinux) { $notes += "- Linux self-contained binary (.tar.gz)`n`nInstall: Extract and run `./Soulman` or use the included `install-linux.sh` script." }
+    if (-not $SkipLinux) { $notes += "- Linux self-contained binary (.tar.gz)`n`nInstall: Extract and run ./Soulman or use the included install-linux.sh script." }
     $notes -join "`n"
 }
 
@@ -410,6 +410,6 @@ Invoke-Step "Creating GitHub release $tagInput" {
 }
 
 Write-Host ""
-Write-Host "✓ Release $tagInput published successfully!" -ForegroundColor Green
+Write-Host "[OK] Release $tagInput published successfully!" -ForegroundColor Green
 if (-not $SkipWindows) { Write-Host "  - soulman_installer.exe (Windows)" }
 if (-not $SkipLinux) { Write-Host "  - soulman-linux.tar.gz (Linux)" }
