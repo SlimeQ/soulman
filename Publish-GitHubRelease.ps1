@@ -396,17 +396,21 @@ if (-not $SkipLinux) {
 $releaseNotes = if ($NotesPath) {
     Get-Content $NotesPath -Raw
 } else {
-    $notes = @()
-    if (-not $SkipWindows) { $notes += "- Windows ClickOnce installer (.exe)" }
-    if (-not $SkipLinux) { $notes += "- Linux self-contained binary (.tar.gz)`n`nInstall: Extract and run ./Soulman or use the included install-linux.sh script." }
-    $notes -join "`n"
+    $noteLines = @()
+    if (-not $SkipWindows) { $noteLines += "- Windows ClickOnce installer (.exe)" }
+    if (-not $SkipLinux) { 
+        $noteLines += "- Linux self-contained binary (.tar.gz)"
+        $noteLines += ""
+        $noteLines += "Install: Extract and run ./Soulman or use the included install-linux.sh script."
+    }
+    $noteLines -join [Environment]::NewLine
 }
 
 Invoke-Step "Creating GitHub release $tagInput" {
-    $ghArgs = @('release', 'create', $tagInput) + $assets + @('--title', $ReleaseName)
+    $ghArgs = @('release', 'create', $tagInput) + $assets + @('--title', $ReleaseName, '--yes')
     if ($Draft) { $ghArgs += '--draft' }
     $ghArgs += @('--notes', $releaseNotes)
-    gh @ghArgs
+    & gh @ghArgs
 }
 
 Write-Host ""
