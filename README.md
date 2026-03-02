@@ -83,7 +83,7 @@ Defaults (override via config, CLI, or env):
    Stop/delete with `sc stop Soulman` then `sc delete Soulman`. The app respects `appsettings.*` and `SOULMAN__` env vars at service start.
 
 ## Packaging & installer (lifeviz-style)
-- `.\Publish-Installer.ps1` — resolves `MSBuild.exe` and runs the ClickOnce publish profile (`src/Soulman/Properties/PublishProfiles/WinClickOnce.pubxml`). Outputs to `src/Soulman/bin/<Configuration>/net8.0-windows/publish/`.
+- `.\Publish-Installer.ps1` — resolves `MSBuild.exe` and runs the ClickOnce publish profile (`src/Soulman/Properties/PublishProfiles/WinClickOnce.pubxml`) against `net8.0-windows` (required because the app is multi-targeted). Outputs to `src/Soulman/bin/<Configuration>/net8.0-windows/publish/`.
 - `.\deploy.ps1` — builds, publishes with a time-based version stamp so ClickOnce sees an update, copies `Install-ClickOnce.ps1` alongside the payload, then launches `Soulman.application` to install/update in-place.
 - `Install-ClickOnce.ps1` — stages a published payload into `%LOCALAPPDATA%\soulman-clickonce`, clears the ClickOnce cache when available, and launches the packaged `setup.exe` (falls back to `Soulman.application` if needed); used by the GitHub installer, too.
 - `Publish-GitHubRelease.ps1` — prompts for the next version (or takes `-Tag`), publishes via MSBuild, bundles the ClickOnce payload into a single self-contained `soulman_installer.exe` that extracts and runs `setup.exe`, and creates a GitHub release (requires `gh auth login`). Artifacts land in `artifacts/github-release/`.

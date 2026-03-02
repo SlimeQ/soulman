@@ -99,11 +99,14 @@ if ($CleanOutput) {
 $msbuild = Resolve-MsBuild
 Write-Host "Using MSBuild at $msbuild" -ForegroundColor Cyan
 
+$targetFramework = 'net8.0-windows'
+
 $arguments = @(
     (Resolve-Path 'src/Soulman/Soulman.csproj').Path,
     '/t:Publish',
     "/p:PublishProfile=$PublishProfile",
-    "/p:Configuration=$Configuration"
+    "/p:Configuration=$Configuration",
+    "/p:TargetFramework=$targetFramework"
 )
 
 if ($ApplicationVersion) {
