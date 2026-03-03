@@ -6,9 +6,8 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <SelfContained>true</SelfContained>
     
-    <!-- COM hosting for shell extension - requires Windows build host -->
+    <!-- COM hosting for shell extension -->
     <EnableComHosting>true</EnableComHosting>
     <ComHostName>SoulmanIconOverlay</ComHostName>
   </PropertyGroup>

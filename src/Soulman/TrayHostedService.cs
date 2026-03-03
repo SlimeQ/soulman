@@ -242,7 +242,7 @@ public class TrayHostedService : IHostedService, IDisposable
         {
             try
             {
-                Registry.CurrentUser.DeleteSubKeyTree($@"Software\Classes\{target}\shell\{name}", throwOnMissingSubTree: false);
+                Registry.CurrentUser.DeleteSubKeyTree($@"Software\Classes\{target}\shell\{name}", false);
             }
             catch { /* best effort */ }
         }
