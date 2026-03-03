@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Extensions.Options;
+using Microsoft.Win32;
 
 namespace Soulman;
 
@@ -61,6 +62,38 @@ public class TrayHostedService : IHostedService, IDisposable
         _uiThread.TrySetApartmentState(ApartmentState.STA);
         _uiThread.Start();
         _started.Wait(cancellationToken);
+        
+        // Register Windows Explorer context menu (blacklist/purge)
+        // AppliesTo filter ensures items only appear inside sync folders
+        if (OperatingSystem.IsWindows())
+        {
+            try { RegisterShellContextMenu(); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Failed to register shell context menu"); }
+        }
+        
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        // Unregister Windows Explorer context menu
+        if (OperatingSystem.IsWindows())
+        {
+            try { UnregisterShellContextMenu(); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Failed to unregister shell context menu"); }
+        }
+        
+        if (_context != null)
+        {
+            _moveBroker.Unsubscribe(_context.OnMove);
+            _context.ExitThread();
+        }
+
+        if (_uiThread != null && _uiThread.IsAlive)
+        {
+            _uiThread.Join(TimeSpan.FromSeconds(5));
+        }
+
         return Task.CompletedTask;
     }
 
@@ -124,25 +157,95 @@ public class TrayHostedService : IHostedService, IDisposable
         }
     }
 
-    public Task StopAsync(CancellationToken cancellationToken)
-    {
-        if (_context != null)
-        {
-            _moveBroker.Unsubscribe(_context.OnMove);
-            _context.ExitThread();
-        }
-
-        if (_uiThread != null && _uiThread.IsAlive)
-        {
-            _uiThread.Join(TimeSpan.FromSeconds(5));
-        }
-
-        return Task.CompletedTask;
-    }
-
     public void Dispose()
     {
         _context?.Dispose();
+    }
+    
+    // ── Windows Explorer Context Menu Registration ────────────────────────────
+    // Registers "Add to Soulman Blacklist" and "Purge with Soulman" menu items
+    // that only appear inside configured sync folders (Music, Movies, TV).
+    
+    private void RegisterShellContextMenu()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        
+        var syncRoots = GetSyncRootPaths();
+        if (syncRoots.Count == 0)
+        {
+            _logger.LogDebug("No sync roots configured; skipping context menu registration");
+            return;
+        }
+        
+        var appliesTo = BuildAppliesToFilter(syncRoots);
+        var exePath   = Environment.ProcessPath ?? typeof(TrayHostedService).Assembly.Location;
+        
+        _logger.LogDebug("Registering shell context menu with AppliesTo: {AppliesTo}", appliesTo);
+        
+        // Register for files (*) and directories (Directory)
+        RegisterVerb("Soulman.Blacklist", "Add to Soulman Blacklist", exePath, "blacklist", appliesTo);
+        RegisterVerb("Soulman.Purge", "Purge with Soulman", exePath, "purge", appliesTo);
+    }
+    
+    private void UnregisterShellContextMenu()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        
+        UnregisterVerb("Soulman.Blacklist");
+        UnregisterVerb("Soulman.Purge");
+    }
+    
+    private List<string> GetSyncRootPaths()
+    {
+        var s = _options.CurrentValue;
+        var roots = new List<string>();
+        if (!string.IsNullOrWhiteSpace(s.DestinationPath))      roots.Add(Path.GetFullPath(s.DestinationPath!));
+        if (!string.IsNullOrWhiteSpace(s.MovieDestinationPath)) roots.Add(Path.GetFullPath(s.MovieDestinationPath!));
+        if (!string.IsNullOrWhiteSpace(s.TvDestinationPath))     roots.Add(Path.GetFullPath(s.TvDestinationPath!));
+        return roots;
+    }
+    
+    private static string BuildAppliesToFilter(List<string> paths)
+    {
+        // Windows AQS filter: System.ParsingPath:"C:\Path\*" OR System.ParsingPath:"C:\Other\*"
+        var conditions = paths.Select(p => $"System.ParsingPath:\"{EscapeAqs(p)}*\"");
+        return string.Join(" OR ", conditions);
+    }
+    
+    private static string EscapeAqs(string path)
+    {
+        // AQS requires escaping: \ " ' ( ) ~
+        return path.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("'", "\\'")
+                   .Replace("(", "\\(").Replace(")", "\\)").Replace("~", "\\~");
+    }
+    
+    private static void RegisterVerb(string name, string label, string exePath, string subcommand, string appliesTo)
+    {
+        // Register under HKCU\Software\Classes\*\shell\{name} and \Directory\shell\{name}
+        var targets = new[] { "*", "Directory" };
+        
+        foreach (var target in targets)
+        {
+            using var shellKey = Registry.CurrentUser.CreateSubKey($@"Software\Classes\{target}\shell\{name}");
+            shellKey.SetValue("", label);
+            shellKey.SetValue("AppliesTo", appliesTo);
+            shellKey.SetValue("Icon", exePath);
+            
+            using var cmdKey = shellKey.CreateSubKey("command");
+            cmdKey.SetValue("", $"\"{exePath}\" {subcommand} \"%1\"");
+        }
+    }
+    
+    private static void UnregisterVerb(string name)
+    {
+        foreach (var target in new[] { "*", "Directory" })
+        {
+            try
+            {
+                Registry.CurrentUser.DeleteSubKeyTree($@"Software\Classes\{target}\shell\{name}", throwOnMissingSubTree: false);
+            }
+            catch { /* best effort */ }
+        }
     }
 }
 

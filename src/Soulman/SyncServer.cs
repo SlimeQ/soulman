@@ -11,6 +11,7 @@ public class SyncServer : IHostedService, IDisposable
 {
     private readonly ILogger<SyncServer> _logger;
     private readonly IOptionsMonitor<SoulmanSettings> _options;
+    private PurgeOrchestrator? _purgeOrchestrator;
     private TcpListener? _listener;
     private Task? _listeningTask;
     private readonly CancellationTokenSource _cts = new();
@@ -22,6 +23,9 @@ public class SyncServer : IHostedService, IDisposable
         _logger = logger;
         _options = options;
     }
+
+    // Set after construction to avoid circular DI (PurgeOrchestrator → InstanceDiscovery → SyncServer)
+    internal void SetPurgeOrchestrator(PurgeOrchestrator orchestrator) => _purgeOrchestrator = orchestrator;
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -118,6 +122,9 @@ public class SyncServer : IHostedService, IDisposable
                             break;
                         case "GET":
                             await HandleGet(arg, writer, stream);
+                            break;
+                        case "PURGE":
+                            await HandlePurge(arg, writer);
                             break;
                         case "BYE":
                             return;
@@ -279,6 +286,32 @@ public class SyncServer : IHostedService, IDisposable
 
         // Legacy/single-root fallback
         return (roots.FirstOrDefault(), normalized);
+    }
+
+    // PURGE <syncPath> <msgId>
+    // e.g. PURGE Music/Movies abc123
+    // Loop prevention: PurgeOrchestrator tracks seen message IDs.
+    private async Task HandlePurge(string arg, StreamWriter writer)
+    {
+        // arg = "<syncPath> <msgId>"
+        var parts = arg.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2)
+        {
+            await writer.WriteLineAsync("ERROR Invalid PURGE format; expected: PURGE <syncPath> <msgId>");
+            return;
+        }
+
+        var syncPath = parts[0];
+        var msgId    = parts[1];
+
+        if (_purgeOrchestrator == null)
+        {
+            await writer.WriteLineAsync("ERROR PURGE handler not ready");
+            return;
+        }
+
+        _purgeOrchestrator.HandleIncomingPurge(syncPath, msgId);
+        await writer.WriteLineAsync("OK");
     }
 
     private sealed record SyncRoot(string Path, string Prefix);
