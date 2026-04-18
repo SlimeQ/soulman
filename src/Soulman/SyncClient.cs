@@ -33,6 +33,14 @@ public class SyncClient
     {
         if (peer.SyncPort <= 0) return;
 
+        var settings = _options.CurrentValue;
+        var downloadFilters = DownloadFilterPolicy.GetSnapshot(settings, _logger);
+        if (DownloadFilterPolicy.IsPeerBlocked(peer, downloadFilters))
+        {
+            _logger.LogInformation("Skipping sync with {Machine} because peer downloads are blocked", peer.MachineName);
+            return;
+        }
+
         var syncWatch = Stopwatch.StartNew();
         _logger.LogInformation("Starting sync with {Machine} at {Endpoint}:{Port}", peer.MachineName, peer.EndPoint.Address, peer.SyncPort);
 
@@ -74,7 +82,19 @@ public class SyncClient
 
         _logger.LogInformation("Peer {Machine} has {Count} files", peer.MachineName, remoteFiles.Count);
 
-        var settings = _options.CurrentValue;
+        var beforeDownloadFilterCount = remoteFiles.Count;
+        remoteFiles = remoteFiles
+            .Where(f => !DownloadFilterPolicy.IsDownloadBlocked(f.Path, downloadFilters))
+            .ToList();
+
+        var blockedByDownloadFilters = beforeDownloadFilterCount - remoteFiles.Count;
+        if (blockedByDownloadFilters > 0)
+        {
+            _logger.LogInformation(
+                "Filtered {Count} remote files due to download filter settings (root toggles/folder blocks)",
+                blockedByDownloadFilters);
+        }
+
         var purgedPaths = PurgePathPolicy.GetSafeConfiguredPaths(settings, _logger);
 
         if (purgedPaths.Count > 0)

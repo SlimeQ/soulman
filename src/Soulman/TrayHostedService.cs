@@ -24,6 +24,7 @@ public class TrayHostedService : IHostedService, IDisposable
     private readonly InstanceDiscovery _discovery;
     private readonly TransferProgressBroker _progressBroker;
     private readonly BlacklistManager _blacklistManager;
+    private readonly DownloadFilterManager _downloadFilterManager;
     private Thread? _uiThread;
     private TrayApplicationContext? _context;
     private readonly ManualResetEventSlim _started = new(false);
@@ -38,7 +39,8 @@ public class TrayHostedService : IHostedService, IDisposable
         MoveLogStore moveLog,
         InstanceDiscovery discovery,
         TransferProgressBroker progressBroker,
-        BlacklistManager blacklistManager)
+        BlacklistManager blacklistManager,
+        DownloadFilterManager downloadFilterManager)
     {
         _logger = logger;
         _appLifetime = appLifetime;
@@ -50,6 +52,7 @@ public class TrayHostedService : IHostedService, IDisposable
         _discovery = discovery;
         _progressBroker = progressBroker;
         _blacklistManager = blacklistManager;
+        _downloadFilterManager = downloadFilterManager;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -115,7 +118,7 @@ public class TrayHostedService : IHostedService, IDisposable
             icon ??= SystemIcons.Application;
 
             _context = new TrayApplicationContext(_logger, _options, _cloneStore, _pathStore, _moveBroker, _moveLog,
-                _discovery, _progressBroker, _blacklistManager, icon);
+                _discovery, _progressBroker, _blacklistManager, _downloadFilterManager, icon);
             _started.Set();
             Application.Run(_context);
         }
@@ -261,6 +264,7 @@ internal class TrayApplicationContext : ApplicationContext
     private readonly InstanceDiscovery _discovery;
     private readonly TransferProgressBroker _progressBroker;
     private readonly BlacklistManager _blacklistManager;
+    private readonly DownloadFilterManager _downloadFilterManager;
     private readonly NotifyIcon _notifyIcon;
     private readonly ContextMenuStrip _menu;
     private readonly string _startupShortcutPath;
@@ -273,7 +277,7 @@ internal class TrayApplicationContext : ApplicationContext
         CloneFolderStore cloneStore,
         PathPreferenceStore pathStore, MoveNotificationBroker moveBroker, MoveLogStore moveLog,
         InstanceDiscovery discovery, TransferProgressBroker progressBroker,
-        BlacklistManager blacklistManager, Icon? icon)
+        BlacklistManager blacklistManager, DownloadFilterManager downloadFilterManager, Icon? icon)
     {
         _logger = logger;
         _options = options;
@@ -284,6 +288,7 @@ internal class TrayApplicationContext : ApplicationContext
         _discovery = discovery;
         _progressBroker = progressBroker;
         _blacklistManager = blacklistManager;
+        _downloadFilterManager = downloadFilterManager;
         _menu = new ContextMenuStrip();
         _uiContext = SynchronizationContext.Current;
         _startupShortcutPath = Path.Combine(
@@ -317,6 +322,7 @@ internal class TrayApplicationContext : ApplicationContext
         var prefs = _pathStore.Get();
         var sourcePath = prefs.SourcePath ?? settings.SourcePath;
         var destPath = prefs.DestinationPath ?? settings.DestinationPath;
+        var downloadFilters = DownloadFilterPolicy.GetSnapshot(settings, _logger);
 
         _menu.Items.Add(new ToolStripMenuItem(SoulmanVersion.GetLabel()) { Enabled = false });
         _menu.Items.Add(new ToolStripSeparator());
@@ -358,9 +364,12 @@ internal class TrayApplicationContext : ApplicationContext
         openSettings.Click += (_, _) => OpenSettingsPanel();
         _menu.Items.Add(openSettings);
 
-        var manageBlacklist = new ToolStripMenuItem("Manage Blacklist...");
+        var manageBlacklist = new ToolStripMenuItem("Manage Purge Blacklist...");
         manageBlacklist.Click += (_, _) => OpenBlacklistForm();
         _menu.Items.Add(manageBlacklist);
+
+        var downloadFilterMenu = BuildDownloadFilterMenu(downloadFilters);
+        _menu.Items.Add(downloadFilterMenu);
 
         var setDest = new ToolStripMenuItem($"Set Destination Folder...{DisplayPathSuffix(destPath)}");
         setDest.Click += (_, _) => SetDestinationFolder();
@@ -407,6 +416,109 @@ internal class TrayApplicationContext : ApplicationContext
         _notifyIcon.ContextMenuStrip = _menu;
     }
 
+    private ToolStripMenuItem BuildDownloadFilterMenu(DownloadFilterSnapshot snapshot)
+    {
+        var menu = new ToolStripMenuItem("Download Filters");
+
+        var allowMusic = new ToolStripMenuItem("Allow Music Downloads")
+        {
+            Checked = snapshot.AllowMusic,
+            CheckOnClick = true
+        };
+        allowMusic.Click += (_, _) => SetDownloadCategoryAllowed("Music", allowMusic.Checked);
+        menu.DropDownItems.Add(allowMusic);
+
+        var allowMovies = new ToolStripMenuItem("Allow Movies Downloads")
+        {
+            Checked = snapshot.AllowMovies,
+            CheckOnClick = true
+        };
+        allowMovies.Click += (_, _) => SetDownloadCategoryAllowed("Movies", allowMovies.Checked);
+        menu.DropDownItems.Add(allowMovies);
+
+        var allowTv = new ToolStripMenuItem("Allow TV Downloads")
+        {
+            Checked = snapshot.AllowTv,
+            CheckOnClick = true
+        };
+        allowTv.Click += (_, _) => SetDownloadCategoryAllowed("TV", allowTv.Checked);
+        menu.DropDownItems.Add(allowTv);
+
+        menu.DropDownItems.Add(new ToolStripSeparator());
+
+        var manageFolders = new ToolStripMenuItem($"Manage Blocked Folders... ({snapshot.BlockedFolders.Count})");
+        manageFolders.Click += (_, _) => OpenDownloadFolderBlockForm();
+        menu.DropDownItems.Add(manageFolders);
+
+        var blockedPeers = snapshot.BlockedPeers
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var blockedPeersMenu = new ToolStripMenuItem($"Blocked Peers ({blockedPeers.Count})");
+        if (blockedPeers.Count == 0)
+        {
+            blockedPeersMenu.DropDownItems.Add(new ToolStripMenuItem("No blocked peers") { Enabled = false });
+        }
+        else
+        {
+            foreach (var peer in blockedPeers)
+            {
+                var item = new ToolStripMenuItem(peer);
+                item.Click += (_, _) => TogglePeerDownloadBlock(peer);
+                blockedPeersMenu.DropDownItems.Add(item);
+            }
+        }
+
+        blockedPeersMenu.DropDownItems.Add(new ToolStripSeparator());
+        var clearBlockedPeers = new ToolStripMenuItem("Clear Blocked Peers");
+        clearBlockedPeers.Enabled = blockedPeers.Count > 0;
+        clearBlockedPeers.Click += (_, _) =>
+        {
+            var (success, message) = _downloadFilterManager.ClearBlockedPeers();
+            Notify("Soulman", message, success ? ToolTipIcon.Info : ToolTipIcon.Warning);
+            BuildMenu();
+        };
+        blockedPeersMenu.DropDownItems.Add(clearBlockedPeers);
+        menu.DropDownItems.Add(blockedPeersMenu);
+
+        menu.DropDownItems.Add(new ToolStripSeparator());
+        menu.DropDownItems.Add(new ToolStripMenuItem("Tip: toggle peers in Other Soulman Instances") { Enabled = false });
+
+        return menu;
+    }
+
+    private void SetDownloadCategoryAllowed(string category, bool allowed)
+    {
+        var (success, message) = _downloadFilterManager.SetCategoryAllowed(category, allowed);
+        Notify("Soulman", message, success ? ToolTipIcon.Info : ToolTipIcon.Warning);
+        BuildMenu();
+    }
+
+    private void OpenDownloadFolderBlockForm()
+    {
+        try
+        {
+            using var form = new DownloadFolderFilterForm(_downloadFilterManager);
+            form.ShowDialog();
+            BuildMenu();
+        }
+        catch (Exception ex)
+        {
+            _notifyIcon.ShowBalloonTip(
+                3000,
+                "Soulman",
+                $"Could not open folder filter manager: {ex.Message}",
+                ToolTipIcon.Warning);
+        }
+    }
+
+    private void TogglePeerDownloadBlock(string peerIdentity)
+    {
+        var (success, _, message) = _downloadFilterManager.TogglePeerBlocked(peerIdentity);
+        Notify("Soulman", message, success ? ToolTipIcon.Info : ToolTipIcon.Warning);
+        BuildMenu();
+    }
+
     private async Task RefreshInstancesAsync()
     {
         if (_instancesMenu == null)
@@ -441,13 +553,25 @@ internal class TrayApplicationContext : ApplicationContext
                 return;
             }
 
+            var blockedPeers = new HashSet<string>(_downloadFilterManager.ListBlockedPeers(), StringComparer.OrdinalIgnoreCase);
             var items = instances
                 .OrderBy(i => i.MachineName, StringComparer.OrdinalIgnoreCase)
                 .Select(instance =>
                 {
                     var label = BuildInstanceLabel(instance);
-                    var item = new ToolStripMenuItem(label) { Enabled = false };
-                    item.ToolTipText = instance.EndPoint.ToString();
+                    var machineKey = DownloadFilterPolicy.NormalizePeer(instance.MachineName);
+                    var addressKey = DownloadFilterPolicy.NormalizePeer(instance.EndPoint.Address.ToString());
+                    var isBlocked = blockedPeers.Contains(machineKey) || blockedPeers.Contains(addressKey);
+
+                    var item = new ToolStripMenuItem(label)
+                    {
+                        Checked = isBlocked,
+                        CheckOnClick = false
+                    };
+                    item.ToolTipText = isBlocked
+                        ? $"{instance.EndPoint} (downloads blocked; click to allow)"
+                        : $"{instance.EndPoint} (click to block downloads)";
+                    item.Click += (_, _) => TogglePeerDownloadBlock(instance.MachineName);
                     return item;
                 })
                 .ToList();
@@ -914,6 +1038,7 @@ internal class TrayApplicationContext : ApplicationContext
 
 internal sealed class SoulmanSettingsForm : Form
 {
+    private readonly DownloadFilterSettings _downloadFilters;
     private readonly TextBox _sourcePath = new() { Dock = DockStyle.Fill };
     private readonly TextBox _destinationPath = new() { Dock = DockStyle.Fill };
     private readonly TextBox _moviePath = new() { Dock = DockStyle.Fill };
@@ -925,6 +1050,7 @@ internal sealed class SoulmanSettingsForm : Form
 
     public SoulmanSettingsForm(SoulmanTraySettings settings)
     {
+        _downloadFilters = DownloadFilterPolicy.Clone(settings.DownloadFilters);
         Text = "Soulman Settings";
         Width = 760;
         Height = 560;
@@ -1000,7 +1126,8 @@ internal sealed class SoulmanSettingsForm : Form
                 .Select(s => s.Trim())
                 .Where(s => !string.IsNullOrWhiteSpace(s))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList()
+                .ToList(),
+            DownloadFilters = DownloadFilterPolicy.Clone(_downloadFilters)
         };
     }
 
@@ -1031,6 +1158,7 @@ internal sealed class SoulmanTraySettings
     public string? TvDestinationPath { get; set; }
     public List<string> AdditionalSources { get; set; } = new();
     public List<string> PurgedPaths { get; set; } = new();
+    public DownloadFilterSettings DownloadFilters { get; set; } = new();
     public int PollIntervalSeconds { get; set; } = 30;
     public int SettledSeconds { get; set; } = 20;
 
@@ -1044,6 +1172,7 @@ internal sealed class SoulmanTraySettings
             TvDestinationPath = current.TvDestinationPath,
             AdditionalSources = current.AdditionalSources?.ToList() ?? new List<string>(),
             PurgedPaths = current.PurgedPaths?.ToList() ?? new List<string>(),
+            DownloadFilters = DownloadFilterPolicy.Clone(current.DownloadFilters),
             PollIntervalSeconds = current.PollIntervalSeconds,
             SettledSeconds = current.SettledSeconds
         };

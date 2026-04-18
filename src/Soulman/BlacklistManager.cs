@@ -152,6 +152,7 @@ public class BlacklistManager
                 PollIntervalSeconds = current.PollIntervalSeconds,
                 SettledSeconds = current.SettledSeconds,
                 PurgedPaths = purgedPaths.ToArray(),
+                DownloadFilters = DownloadFilterPolicy.Clone(current.DownloadFilters),
                 AllowedExtensions = current.AllowedExtensions,
                 VideoExtensions = current.VideoExtensions,
                 SubtitleExtensions = current.SubtitleExtensions
