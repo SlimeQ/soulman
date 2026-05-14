@@ -22,6 +22,11 @@
 ## Operational notes
 - Schedule: fixed 5-minute interval (no user knob yet).
 - Filtering: only files allowed by `SoulmanSettings.IsSupportedFile` are listed/served.
+- Download-side filters:
+  - `DownloadFilters.BlockedPeers` skips entire peers during `SyncClient` sync.
+  - `DownloadFilters.AllowMusic` / `AllowMovies` / `AllowTv` toggle incoming root categories.
+  - `DownloadFilters.BlockedFolders` skips incoming paths under configured folder prefixes (scoped `Music/...`, `Movies/...`, `TV/...`).
+  - `PurgedPaths` still acts as a bi-directional sync blacklist (not served and not downloaded), while download filters are inbound-only.
 - Safety: server blocks traversal (`..`) and enforces that served paths stay under `DestinationPath`.
 - Resumes: not supported; failed downloads are retried on the next sync cycle.
 - Progress: `TransferProgressBroker` fires per-chunk progress and completion events.

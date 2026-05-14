@@ -85,6 +85,7 @@ if (OperatingSystem.IsLinux())
 
 builder.Services.Configure<SoulmanSettings>(builder.Configuration.GetSection("Soulman"));
 builder.Services.AddSingleton<BlacklistManager>();
+builder.Services.AddSingleton<DownloadFilterManager>();
 builder.Services.AddSingleton<PurgeOrchestrator>();
 builder.Services.AddSingleton<DownloadScanner>();
 builder.Services.AddSingleton<CloneFolderStore>();
@@ -320,6 +321,43 @@ static SoulmanSettings? LoadCliSettings(string configPath)
             s.PurgedPaths = v.EnumerateArray()
                 .Select(e => e.GetString() ?? "").Where(x => x.Length > 0).ToArray();
         }
+        if (sec.TryGetProperty("DownloadFilters", out v))
+        {
+            var filters = new DownloadFilterSettings();
+
+            if (v.TryGetProperty("AllowMusic", out var filterProp))
+            {
+                filters.AllowMusic = filterProp.GetBoolean();
+            }
+
+            if (v.TryGetProperty("AllowMovies", out filterProp))
+            {
+                filters.AllowMovies = filterProp.GetBoolean();
+            }
+
+            if (v.TryGetProperty("AllowTv", out filterProp))
+            {
+                filters.AllowTv = filterProp.GetBoolean();
+            }
+
+            if (v.TryGetProperty("BlockedPeers", out filterProp))
+            {
+                filters.BlockedPeers = filterProp.EnumerateArray()
+                    .Select(e => e.GetString() ?? "")
+                    .Where(x => x.Length > 0)
+                    .ToArray();
+            }
+
+            if (v.TryGetProperty("BlockedFolders", out filterProp))
+            {
+                filters.BlockedFolders = filterProp.EnumerateArray()
+                    .Select(e => e.GetString() ?? "")
+                    .Where(x => x.Length > 0)
+                    .ToArray();
+            }
+
+            s.DownloadFilters = DownloadFilterPolicy.Clone(filters);
+        }
         return s;
     }
     catch { return null; }
@@ -370,7 +408,8 @@ static void CliSaveBlacklist(string configPath, SoulmanSettings s, string[] purg
             AdditionalSources = s.AdditionalSources ?? new List<string>(),
             s.PollIntervalSeconds,
             s.SettledSeconds,
-            PurgedPaths = purgedPaths
+            PurgedPaths = purgedPaths,
+            DownloadFilters = DownloadFilterPolicy.Clone(s.DownloadFilters)
         }
     }, new JsonSerializerOptions
     {

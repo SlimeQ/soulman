@@ -24,6 +24,8 @@ public class SoulmanSettings
     // Safety: root-only paths like "Music" are ignored.
     public string[] PurgedPaths { get; set; } = Array.Empty<string>();
 
+    public DownloadFilterSettings DownloadFilters { get; set; } = new();
+
     public string[] AllowedExtensions { get; set; } =
     {
         ".mp3", ".flac", ".wav", ".aac", ".m4a", ".ogg", ".aiff", ".alac", ".opus", ".wv", ".ape"

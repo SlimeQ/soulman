@@ -38,6 +38,16 @@ Defaults (override via config, CLI, or env):
 - `SettledSeconds`: 20
 - Extensions: `.mp3, .flac, .wav, .aac, .m4a, .ogg, .aiff, .alac, .opus, .wv, .ape`
 - `PurgedPaths`: `[]` (optional sync blacklist such as `Music/Music` or `Music/Movies` - files under these paths are excluded from peer sync but NOT deleted locally)
+- `DownloadFilters`: `{ AllowMusic: true, AllowMovies: true, AllowTv: true, BlockedPeers: [], BlockedFolders: [] }`
+
+### Download Filters
+
+`DownloadFilters` controls what this instance will pull from peers:
+- `AllowMusic`, `AllowMovies`, `AllowTv`: per-root category toggles for incoming sync downloads.
+- `BlockedPeers`: peers to skip entirely during download sync (machine names shown in tray discovery; IPs are also accepted).
+- `BlockedFolders`: scoped folder prefixes to skip (for example `Music/Podcasts`, `Movies/Unsorted`, `TV/Reality`).
+
+`BlockedFolders` entries must be scoped like `Music/something`, `Movies/something`, or `TV/something`. Root-only entries are rejected.
 
 ### Blacklist Management
 
@@ -70,7 +80,7 @@ Soulman supports a "blacklist" of paths that are excluded from peer sync. This i
 
 #### Windows UI
 
-From the tray icon menu, select **Manage Blacklist...** to open a dialog where you can:
+From the tray icon menu, select **Manage Purge Blacklist...** to open a dialog where you can:
 - View all currently blacklisted paths
 - Add new paths (validated before adding)
 - Remove selected paths
@@ -99,12 +109,15 @@ The blacklist is stored in the `PurgedPaths` setting in your `appsettings.json`.
 - Moves the organized file into the destination, clones it to any configured clone roots, and logs the result for the last 24 hours.
 - Emits warnings when a protected path is encountered so you can adjust sources before anything is moved.
 - `PurgedPaths` entries are treated as deny-list prefixes in peer sync: files under those paths are not served (to peers) and not downloaded (from peers). Local files are never deleted. For safety, root-only entries (`Music`, `Movies`, `TV`) are ignored.
+- `DownloadFilters` are client-side inbound controls only: they can block specific peers, roots, and folder prefixes without affecting what this machine serves to others.
 
 ### Tray, clones, and logs
 - Tray icon (uses `soulman.ico`) gives:
   - Header shows the current version (ClickOnce version when deployed)
   - Other Soulman Instances shows peers discovered on the local network as `Soulman <version> on <HOSTNAME>`; uses a quick UDP broadcast on port 45832 and a Refresh item to rescan.
     - Discovery sends to directed broadcast, limited broadcast, and multicast `239.255.64.64`; replies also go back to the sender’s source port in case inbound 45832 is blocked.
+    - Click a peer entry to toggle whether downloads from that peer are blocked on this machine.
+  - Download Filters menu includes per-root toggles (`Music`, `Movies`, `TV`), blocked-peer list controls, and blocked-folder management.
   - Set Source Folder / Set Destination Folder (persisted to `%LOCALAPPDATA%\Soulman\paths.json`)
   - Add Clone Destination (UNC/network paths allowed) to mirror the organized library
   - Open Source / Destination folders
